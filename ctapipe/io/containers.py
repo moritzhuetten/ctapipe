@@ -42,6 +42,22 @@ __all__ = ['InstrumentContainer',
            'HillasParametersContainer']
 
 
+class HillasParametersContainer(Container):
+    intensity = Field(nan, 'total intensity (size)')
+
+    x = Field(nan, 'centroid x coordinate')
+    y = Field(nan, 'centroid x coordinate')
+    r = Field(nan, 'radial coordinate of centroid')
+    phi = Field(nan, 'polar coordinate of centroid', unit=u.deg)
+
+    length = Field(nan, 'RMS spread along the major-axis')
+    width = Field(nan, 'RMS spread along the minor-axis')
+    psi = Field(nan, 'rotation angle of ellipse', unit=u.deg)
+
+    skewness = Field(nan, 'measure of the asymmetry')
+    kurtosis = Field(nan, 'measure of the tailedness')
+
+
 class SST1MCameraContainer(Container):
     pixel_flags = Field(None, 'numpy array containing pixel flags')
     digicam_baseline = Field(None, 'Baseline computed by DigiCam')
@@ -105,6 +121,10 @@ class DL1CameraContainer(Container):
     )
     cleaned = Field(
         None, "numpy array containing the waveform after cleaning"
+    )
+    hillas_params = Field(HillasParametersContainer(),
+                          "HillasParametersContainer instance with the computed"
+                          "Hillas parameter values"
     )
 
 
@@ -232,6 +252,7 @@ class MCCameraEventContainer(Container):
         0,
         "the tracking Altitude corrected for pointing errors for the telescope"
     )
+
 
 class MCEventContainer(Container):
     """
@@ -420,7 +441,6 @@ class NectarCAMCameraContainer(Container):
         ])
 
 
-
 class NectarCAMContainer(Container):
     """
     Storage for the NectarCAMCameraContainer for each telescope
@@ -500,8 +520,6 @@ class LSTCameraContainer(Container):
     svc = Field(LSTServiceContainer(), "LST specific camera_config Information")
 
 
-
-
 class LSTContainer(Container):
     """
     Storage for the LSTCameraContainer for each telescope
@@ -512,7 +530,6 @@ class LSTContainer(Container):
     tel = Field(
         Map(LSTCameraContainer),
         "map of tel_id to LSTTelContainer")
-
 
 
 class LSTDataContainer(DataContainer):
@@ -654,18 +671,3 @@ class MuonIntensityParameter(Container):
     intensity_fit_method = Field("", 'intensity fit method')
     inputfile = Field("", 'input file')
 
-
-class HillasParametersContainer(Container):
-    intensity = Field(nan, 'total intensity (size)')
-
-    x = Field(nan, 'centroid x coordinate')
-    y = Field(nan, 'centroid x coordinate')
-    r = Field(nan, 'radial coordinate of centroid')
-    phi = Field(nan, 'polar coordinate of centroid', unit=u.deg)
-
-    length = Field(nan, 'RMS spread along the major-axis')
-    width = Field(nan, 'RMS spread along the minor-axis')
-    psi = Field(nan, 'rotation angle of ellipse', unit=u.deg)
-
-    skewness = Field(nan, 'measure of the asymmetry')
-    kurtosis = Field(nan, 'measure of the tailedness')
