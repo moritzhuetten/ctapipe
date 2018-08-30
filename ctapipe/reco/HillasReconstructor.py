@@ -246,8 +246,6 @@ class HillasReconstructor(Reconstructor):
 
         return result, err_est_dir
 
-
-
     def estimate_core_position(self):
         r"""calculates the core position as the least linear square solution
         of an (over-constrained) equation system
@@ -355,8 +353,6 @@ class HillasReconstructor(Reconstructor):
 
         return pos, pos_uncert
 
-
-
     def estimate_h_max(self, hillas_dict, subarray, pointing_alt, pointing_az):
         weights = []
         tels = []
@@ -399,6 +395,55 @@ class HillasReconstructor(Reconstructor):
                            options={'disp': False}
                            ).x
         return pos_max[2] * u.m
+
+    def predict_from_dl1(self, event):
+        """
+        Runs event parameters reconstruction from the DL1 data. These include
+        event direction, shower maximum height, core position etc.
+        This function is a wrapper around HillasReconstructor.predict().
+
+        Parameters
+        ----------
+        event: ctapipe.io.containers.DataContainer
+            A container with the event information
+
+        Returns
+        -------
+        ReconstructedShowerContainer:
+            A container with the reconstructed event parameters.
+
+        """
+
+        # Now merge all hillas parameters to a single dictionary
+
+        tels_with_data = list(event.r1.tels_with_data)
+
+        # Containters
+        hillas_params = dict()
+        pointing_azimuth = dict()
+        pointing_altitude = dict()
+
+        # Filling containers with event data for available telescopes
+        # Will ignore those without valid Hillas parameters
+        for tel_id in tels_with_data:
+
+            # Checking individual params states
+            hillas_param_states = []
+            for k in event.dl1.tel[tel_id].hillas_params.keys():
+                hillas_param_states.append(np.isfinite(event.dl1.tel[tel_id].hillas_params[k]))
+
+            # Final check - if all params are fine
+            hillas_state = np.all(hillas_param_states)
+
+            # If everything's fine, storing for further usage
+            if hillas_state:
+                # Hillas parameters
+                hillas_params[tel_id] = event.dl1.tel[tel_id].hillas_params
+                # Telescope pointing direction
+                pointing_azimuth[tel_id] = event.mc.tel[tel_id].azimuth_raw * u.rad
+                pointing_altitude[tel_id] = event.mc.tel[tel_id].altitude_raw * u.rad
+
+        return self.predict(hillas_params, event.inst, pointing_altitude, pointing_azimuth)
 
 
 def dist_to_line3d(pos, tels, dirs, weights):
