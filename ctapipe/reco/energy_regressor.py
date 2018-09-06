@@ -73,30 +73,36 @@ class EnergyRegressor(RegressorClassifierBase):
         predict_median = []
         predict_std = []
         for evt in event_list:
-            predicts = []
-            weights = []
-            for cam_id, tels in evt.items():
-                try:
-                    t_res = self.model_dict[cam_id].predict(tels).tolist()
-                    predicts += t_res
-                except KeyError:
-                    # QUESTION if there is no trained classifier for
-                    # `cam_id`, raise an error or just pass this
-                    # camera type?
-                    raise KeyError("cam_id '{}' in event_list but no model defined: {}"
-                                   .format(cam_id, [k for k in self.model_dict]))
+            if len(evt) > 0:
+                predicts = []
+                weights = []
+                for cam_id, tels in evt.items():
+                    try:
+                        t_res = self.model_dict[cam_id].predict(tels).tolist()
+                        predicts += t_res
+                    except KeyError:
+                        # QUESTION if there is no trained classifier for
+                        # `cam_id`, raise an error or just pass this
+                        # camera type?
+                        raise KeyError("cam_id '{}' in event_list but no model defined: {}"
+                                       .format(cam_id, [k for k in self.model_dict]))
 
-                try:
-                    # if a `namedtuple` is provided, we can weight the different images
-                    # using some of the provided features
-                    weights += [t.sum_signal_cam / t.impact_dist for t in tels]
-                except AttributeError:
-                    # otherwise give every image the same weight
-                    weights += [1] * len(tels)
+                    try:
+                        # if a `namedtuple` is provided, we can weight the different images
+                        # using some of the provided features
+                        weights += [t.sum_signal_cam / t.impact_dist for t in tels]
+                    except AttributeError:
+                        # otherwise give every image the same weight
+                        weights += [1] * len(tels)
 
-            predict_mean.append(np.average(predicts, weights=weights))
-            predict_median.append(np.median(predicts))
-            predict_std.append(np.std(predicts))
+                predict_mean.append(np.average(predicts, weights=weights))
+                predict_median.append(np.median(predicts))
+                predict_std.append(np.std(predicts))
+
+            else:
+                predict_mean.append(np.nan)
+                predict_median.append(np.nan)
+                predict_std.append(np.nan)
 
         return {"mean": np.array(predict_mean) * self.unit,
                 "median": np.array(predict_median) * self.unit,
