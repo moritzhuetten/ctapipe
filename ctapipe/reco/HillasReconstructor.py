@@ -341,7 +341,7 @@ class HillasReconstructor(Reconstructor):
         if np.all(np.isfinite(A)) and np.all(np.isfinite(D)):
             # note that NaN values create a value error with MKL
             # installations but not otherwise.
-            pos = np.linalg.lstsq(A, D)[0] * u.m
+            pos = np.linalg.lstsq(A, D, rcond=-1)[0] * u.m
         else:
             return [np.nan, np.nan], [np.nan, np.nan]
 
@@ -416,9 +416,9 @@ class HillasReconstructor(Reconstructor):
 
         # Now merge all hillas parameters to a single dictionary
 
-        tels_with_data = list(event.r1.tels_with_data)
+        tels_with_data = list(event.dl1.tel.keys())
 
-        # Containters
+        # Containers
         hillas_params = dict()
         pointing_azimuth = dict()
         pointing_altitude = dict()
