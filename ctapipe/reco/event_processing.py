@@ -93,7 +93,31 @@ class EventFeatureTargetSelector(HillasFeatureSelector):
 
 
 class EventProcessor:
+    """
+    This class is meant to represents the DL0->DL2 analysis pipeline.
+    It handles event loading, Hillas parameter estimation and storage
+    (DL0->DL1), stereo (with >=2 telescopes) event direction/impact etc.
+    reconstruction and RF energy estimation.
+    """
+
     def __init__(self, calibrator, hillas_reconstructor, min_survived_pixels=10):
+        """
+        Constructor. Sets the calibration / Hillas processing workers.
+
+        Parameters
+        ----------
+        calibrator: ctapipe.calib.CameraCalibrator
+            A desired camera calibrator instance.
+        hillas_reconstructor: ctapipe.reco.HillasReconstructor
+            A "stereo" (with >=2 telescopes) Hillas reconstructor instance that
+            will be used to determine the event direction/impact etc.
+        min_survived_pixels: int, optional
+            Minimal number of pixels in the shower image, that should survive
+            image cleaning. Hillas parameters are not computed for events falling
+            below this threshold.
+            Defaults to 10.
+        """
+
         self.calibrator = calibrator
         self.hillas_reconstructor = hillas_reconstructor
         self.min_survived_pixels = min_survived_pixels
@@ -102,6 +126,22 @@ class EventProcessor:
         self.reconstruction_results = []
 
     def _dl1_process(self, event):
+        """
+        Internal method that performs DL0->DL1 event processing.
+        This involves image cleaning and Hillas parameter calculation.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL0 event data.
+
+        Returns
+        -------
+        DataContainer:
+            Event with computed Hillas parameters.
+
+        """
+
         tels_with_data = list(event.r1.tels_with_data)
 
         for tel_id in tels_with_data:
@@ -132,6 +172,25 @@ class EventProcessor:
         return event
 
     def _update_event_direction(self, event, reco_container):
+        """
+        Internal method used to compute the shower direction/impact etc. from
+        intersection of the per-telescope image planes (from Hillas parameters)
+        and store them to the provided reconstruction container.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        reco_container: ReconstructedContainer
+            A container that will hold the computed shower properties.
+
+        Returns
+        -------
+        ReconstructedContainer:
+            Updated shower reconstruction container.
+
+        """
+
         # Performing a geometrical direction reconstruction
         try:
             reco_container.shower['hillas'] = self.hillas_reconstructor.predict_from_dl1(event)
@@ -142,12 +201,66 @@ class EventProcessor:
         return reco_container
 
     def _update_event_energy(self, event, reco_container):
+        """
+        Internal method used to compute the shower energy from a pre-trained RF
+        and store it to the provided reconstruction container.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        reco_container: ReconstructedContainer
+            A container that will hold the computed shower energy.
+
+        Returns
+        -------
+        ReconstructedContainer:
+            Updated shower reconstruction container.
+
+        """
+
         return reco_container
 
     def _update_event_classification(self, event, reco_container):
+        """
+        Internal method used to compute the classify the using the pre-trained RF
+        and store it to the provided reconstruction container.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        reco_container: ReconstructedContainer
+            A container that will hold the computed shower class.
+
+        Returns
+        -------
+        ReconstructedContainer:
+            Updated shower reconstruction container.
+
+        """
+
         return reco_container
 
     def _load_events(self, file_name, append_to_existing_events):
+        """
+        Internal method that takes care of the event loading from the specified file
+        and DL1 processing. The DL1 events are also stored in the self.events list
+        for future usage; their R0/R1/DL0 containers are reset to save memory.
+
+        Parameters
+        ----------
+        file_name: str
+            A file name from which to read the events.
+        append_to_existing_events: bool
+            Defines whether the previously filled event list should be cleared
+            or if the new events should be appended to it.
+
+        Returns
+        -------
+
+        """
+
         with EventSourceFactory.produce(input_url=file_name) as event_factory:
             event_generator = event_factory._generator()
 
@@ -169,6 +282,35 @@ class EventProcessor:
                      do_direction_reconstruction=True,
                      do_energy_reconstruction=True,
                      do_classification=True):
+
+        """
+        This method represents the file processing pipeline: data loading,
+        DL0->DL1 processing and the subsequent direction/energy/classification.
+
+        Parameters
+        ----------
+        file_name: str
+            A file name from which to read the events.
+        append_to_existing_events: bool
+            Defines whether the previously filled event list should be cleared
+            or if the new events should be appended to it.
+        do_direction_reconstruction: bool, optional
+            Sets whether the direction reconstruction should be performed.
+            Defaults to True.
+        do_energy_reconstruction: bool, optional
+            Sets whether the energy reconstruction should be performed.
+            Requires a trained energy random forest.
+            Defaults to False. NOT YES IMPLEMENTED
+        do_classification: bool, optional
+            Sets whether the event classification should be performed.
+            Requires a trained classifier random forest.
+            Defaults to False. NOT YES IMPLEMENTED
+
+        Returns
+        -------
+
+        """
+
         self._load_events(file_name, append_to_existing_events=append_to_existing_events)
 
         self.reconstruction_results = []
