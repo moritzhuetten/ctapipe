@@ -86,13 +86,52 @@ class HillasFeatureSelector(ABC):
 
 
 class EventFeatureSelector(HillasFeatureSelector):
+    """
+    A class that performs the selects event features for further reconstruction with
+    ctapipe.reco.RegressorClassifierBase.
+    """
+
     def __init__(self, hillas_params_to_use, hillas_reco_params_to_use, telescopes):
+        """
+        Constructor. Stores the settings that will be used during the parameter
+        extraction.
+
+        Parameters
+        ----------
+        hillas_params_to_use: list
+            A list of Hillas parameter names that should be extracted.
+        hillas_reco_params_to_use: list
+            A list of the Hillas "stereo" parameters (after HillasReconstructor),
+            that should also be extracted.
+        telescopes: list
+            List of telescope identifiers. Only events triggering these will be processed.
+        """
+
         super(EventFeatureSelector, self).__init__(hillas_params_to_use, hillas_reco_params_to_use, telescopes)
 
         self.events = []
         self.event_targets = []
 
     def fill_event(self, event, hillas_reco_result, target=None):
+        """
+        This method fills the event features to the feature list.
+        Optionally it can add a "target" value, which can be used
+        to check the accuracy of the reconstruction.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        hillas_reco_result: ReconstructedShowerContainer
+            A container with the computed shower direction properties.
+        target: float
+            A target variable for future regression/classification model.
+
+        Returns
+        -------
+
+        """
+
         event_record = dict()
         for tel_id in self.telescopes:
             feature_entry = []
@@ -115,7 +154,27 @@ class EventFeatureSelector(HillasFeatureSelector):
 
 
 class EventFeatureTargetSelector(HillasFeatureSelector):
+    """
+    A class that performs the selects event features for further training of the
+    ctapipe.reco.RegressorClassifierBase model.
+    """
+
     def __init__(self, hillas_params_to_use, hillas_reco_params_to_use, telescopes):
+        """
+        Constructor. Stores the settings that will be used during the parameter
+        extraction.
+
+        Parameters
+        ----------
+        hillas_params_to_use: list
+            A list of Hillas parameter names that should be extracted.
+        hillas_reco_params_to_use: list
+            A list of the Hillas "stereo" parameters (after HillasReconstructor),
+            that should also be extracted.
+        telescopes: list
+            List of telescope identifiers. Only events triggering these will be processed.
+        """
+
         super(EventFeatureTargetSelector, self).__init__(hillas_params_to_use, hillas_reco_params_to_use, telescopes)
 
         self.features = dict()
@@ -127,6 +186,24 @@ class EventFeatureTargetSelector(HillasFeatureSelector):
             self.targets[tel_id] = []
 
     def fill_event(self, event, hillas_reco_result, target):
+        """
+        This method fills the event features to the feature list;
+        "target" values are added to their own "target" list.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        hillas_reco_result: ReconstructedShowerContainer
+            A container with the computed shower direction properties.
+        target: float
+            A target variable for future regression/classification model.
+
+        Returns
+        -------
+
+        """
+
         event_record = dict()
         for tel_id in self.telescopes:
             feature_entry = []
