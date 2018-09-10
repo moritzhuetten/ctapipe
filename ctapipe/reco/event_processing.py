@@ -2,14 +2,36 @@ import numpy as np
 import astropy.units as u
 from copy import deepcopy
 
+from abc import ABC, abstractmethod
+
 from ctapipe.io import EventSourceFactory
 from ctapipe.image import tailcuts_clean, hillas_parameters
 from ctapipe.reco.HillasReconstructor import TooFewTelescopesException
 from ctapipe.io.containers import ReconstructedContainer, ReconstructedEnergyContainer, ParticleClassificationContainer
 
 
-class HillasFeatureSelector:
+class HillasFeatureSelector(ABC):
+    """
+    The base class that handles the event Hillas parameter extraction
+    for future use with the random forest energy and classification pipelines.
+    """
+
     def __init__(self, hillas_params_to_use, hillas_reco_params_to_use, telescopes):
+        """
+        Constructor. Stores the settings that will be used during the parameter
+        extraction.
+
+        Parameters
+        ----------
+        hillas_params_to_use: list
+            A list of Hillas parameter names that should be extracted.
+        hillas_reco_params_to_use: list
+            A list of the Hillas "stereo" parameters (after HillasReconstructor),
+            that should also be extracted.
+        telescopes: list
+            List of telescope identifiers. Only events triggering these will be processed.
+        """
+
         self.hillas_params_to_use = hillas_params_to_use
         self.hillas_reco_params_to_use = hillas_reco_params_to_use
         self.telescopes = telescopes
@@ -19,12 +41,47 @@ class HillasFeatureSelector:
 
     @staticmethod
     def _get_param_value(param):
+        """
+        An internal method that extracts the parameter value from both
+        float and Quantity instances.
+
+        Parameters
+        ----------
+        param: float or astropy.unit.Quantity
+            A parameter whos value should be extracted.
+
+        Returns
+        -------
+        float:
+            An extracted value. For float the param itself is returned,
+            for Quantity the Quantity.value is taken.
+
+        """
+
         if isinstance(param, u.Quantity):
             return param.value
         else:
             return param
 
+    @abstractmethod
     def fill_event(self, event, hillas_reco_result, target):
+        """
+        A dummy function to process an event.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        hillas_reco_result: ReconstructedShowerContainer
+            A container with the computed shower direction properties.
+        target: float
+            A target variable for future regression/classification model.
+
+        Returns
+        -------
+
+        """
+
         pass
 
 
