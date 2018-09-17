@@ -181,12 +181,20 @@ class HESSIOR1Calibrator(CameraR1Calibrator):
             raise ValueError('Using HESSIOR1Calibrator to calibrate a '
                              'non-hessio event.')
 
+        subarray = event.inst.subarray
+
         for telid in event.r0.tels_with_data:
             if self.check_r0_exists(event, telid):
+                camera_name = subarray.tel[telid].camera.cam_id
+                if camera_name == "MAGICCam":
+                    calib_scale = 0.92
+                else:
+                    calib_scale = self.calib_scale
+
                 samples = event.r0.tel[telid].waveform
                 n_samples = samples.shape[2]
                 ped = event.mc.tel[telid].pedestal / n_samples
-                gain = event.mc.tel[telid].dc_to_pe * self.calib_scale
+                gain = event.mc.tel[telid].dc_to_pe * calib_scale
                 calibrated = (samples - ped[..., None]) * gain[..., None]
                 event.r1.tel[telid].waveform = calibrated
 
