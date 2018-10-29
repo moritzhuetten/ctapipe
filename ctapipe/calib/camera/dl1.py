@@ -181,7 +181,7 @@ class CameraDL1Calibrator(Component):
             # a reference pulse shape
             return np.ones(event.dl0.tel[telid].waveform.shape[0])
 
-    def calibrate(self, event):
+    def calibrate(self, event, use_integration_correction=True):
         """
         Fill the dl1 container with the calibration data that results from the
         configuration of this calibrator.
@@ -190,7 +190,10 @@ class CameraDL1Calibrator(Component):
         ----------
         event : container
             A `ctapipe` event container
+        use_integration_correction : bool
+            A switch to enable/disable the charge integration correction
         """
+
         for telid in event.dl0.tels_with_data:
 
             if self.check_dl0_exists(event, telid):
@@ -216,7 +219,10 @@ class CameraDL1Calibrator(Component):
 
                     # Apply integration correction
                     correction = self.get_correction(event, telid)[:, None]
-                    corrected = charge * correction
+                    if use_integration_correction:
+                        corrected = charge * correction
+                    else:
+                        corrected = charge
 
                 # Clip amplitude
                 if self.clip_amplitude:
