@@ -187,7 +187,7 @@ class HESSIOR1Calibrator(CameraR1Calibrator):
             if self.check_r0_exists(event, telid):
                 camera_name = subarray.tel[telid].camera.cam_id
                 if camera_name == "MAGICCam":
-                    calib_scale = 0.92
+                    calib_scale = 1.0
                 else:
                     calib_scale = self.calib_scale
 
