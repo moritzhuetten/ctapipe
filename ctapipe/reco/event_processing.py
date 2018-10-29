@@ -4,10 +4,11 @@ from copy import deepcopy
 
 from abc import ABC, abstractmethod
 
-from ctapipe.io import EventSourceFactory
 from ctapipe.image import tailcuts_clean, hillas_parameters
-from ctapipe.reco.HillasReconstructor import TooFewTelescopesException
+from ctapipe.io import EventSourceFactory
 from ctapipe.io.containers import ReconstructedContainer, ReconstructedEnergyContainer, ParticleClassificationContainer
+from ctapipe.reco import EnergyRegressor
+from ctapipe.reco.HillasReconstructor import TooFewTelescopesException
 
 
 class HillasFeatureSelector(ABC):
@@ -465,3 +466,144 @@ class EventProcessor:
 
             self.reconstruction_results.append(reco_results)
 
+
+class EnergyEstimator:
+    def __init__(self, hillas_params_to_use, hillas_reco_params_to_use, telescopes):
+        """
+        Constructor. Stores the settings that will be used during the parameter
+        extraction.
+
+        Parameters
+        ----------
+        hillas_params_to_use: list
+            A list of Hillas parameter names that should be extracted.
+        hillas_reco_params_to_use: list
+            A list of the Hillas "stereo" parameters (after HillasReconstructor),
+            that should also be extracted.
+        telescopes: list
+            List of telescope identifiers. Only events triggering these will be processed.
+        """
+
+        self.hillas_params_to_use = hillas_params_to_use
+        self.hillas_reco_params_to_use = hillas_reco_params_to_use
+        self.telescopes = telescopes
+
+        n_features_per_telescope = len(hillas_params_to_use) + len(hillas_reco_params_to_use)
+        self.n_features = n_features_per_telescope * len(telescopes)
+
+        self.train_features = dict()
+        self.train_targets = dict()
+        self.train_events = []
+
+        for tel_id in self.telescopes:
+            self.train_features[tel_id] = []
+            self.train_targets[tel_id] = []
+
+        self.regressor = EnergyRegressor(cam_id_list=self.telescopes)
+
+    @staticmethod
+    def _get_param_value(param):
+        """
+        An internal method that extracts the parameter value from both
+        float and Quantity instances.
+
+        Parameters
+        ----------
+        param: float or astropy.unit.Quantity
+            A parameter whose value should be extracted.
+
+        Returns
+        -------
+        float:
+            An extracted value. For float the param itself is returned,
+            for Quantity the Quantity.value is taken.
+
+        """
+
+        if isinstance(param, u.Quantity):
+            return param.value
+        else:
+            return param
+
+    def add_train_event(self, event, reco_result):
+        """
+        This method fills the event features to the feature list;
+        "target" values are added to their own "target" list.
+
+        Parameters
+        ----------
+        event: DataContainer
+            Container instances, holding DL1 event data.
+        reco_result: ReconstructedContainer
+            A container with the already reconstructed event properties.
+            Its 'shower' part must have the 'hillas' key.
+
+        Returns
+        -------
+
+        """
+
+        event_record = dict()
+
+        for tel_id in self.telescopes:
+            feature_entry = []
+
+            for param_name in self.hillas_params_to_use:
+                param = event.dl1.tel[tel_id].hillas_params[param_name]
+
+                feature_entry.append(self._get_param_value(param))
+
+            for param_name in self.hillas_reco_params_to_use:
+                param = reco_result.shower['hillas'][param_name]
+
+                feature_entry.append(self._get_param_value(param))
+
+            if np.all(np.isfinite(feature_entry)):
+                event_energy = event.mc.energy.to(u.TeV).value
+                self.train_features[tel_id].append(feature_entry)
+                self.train_targets[tel_id].append(np.log10(event_energy))
+
+                event_record[tel_id] = [feature_entry]
+
+        self.train_events.append(event_record)
+
+    def process_event(self, event, reco_result):
+        event_record = dict()
+        for tel_id in self.telescopes:
+            feature_entry = []
+
+            for param_name in self.hillas_params_to_use:
+                param = event.dl1.tel[tel_id].hillas_params[param_name]
+
+                feature_entry.append(self._get_param_value(param))
+
+            for param_name in self.hillas_reco_params_to_use:
+                param = reco_result.shower['hillas'][param_name]
+
+                feature_entry.append(self._get_param_value(param))
+
+            if np.all(np.isfinite(feature_entry)):
+                event_record[tel_id] = [feature_entry]
+
+        predicted_energy_dict = self.regressor.predict_by_event([event_record])
+
+        reconstructed_energy = 10**predicted_energy_dict['mean'].value * u.TeV
+        std = predicted_energy_dict['std'].value
+        rel_uncert = 0.5 * (10 ** std - 1 / 10 ** std)
+
+        energy_container = ReconstructedEnergyContainer()
+        energy_container.energy = reconstructed_energy
+        energy_container.energy_uncert = energy_container.energy * rel_uncert
+        energy_container.is_valid = True
+        energy_container.tel_ids = list(event_record.keys())
+
+        return energy_container
+
+    def fit_model(self):
+        _ = self.regressor.fit(self.train_features, self.train_targets)
+
+    def save_model(self):
+        pass
+
+    def load_model(self):
+        pass
