@@ -10,52 +10,42 @@ import numpy as np
 from ..core import Container, Field, Map
 from ..instrument import SubarrayDescription
 
-__all__ = ['InstrumentContainer',
-           'R0Container',
-           'R0CameraContainer',
-           'R1Container',
-           'R1CameraContainer',
-           'DL0Container',
-           'DL0CameraContainer',
-           'DL1Container',
-           'DL1CameraContainer',
-           'TargetIOContainer',
-           'TargetIOCameraContainer',
-           'SST1MContainer',
-           'SST1MCameraContainer',
-           'LSTContainer',
-           'LSTCameraContainer',
-           'NectarCAMContainer',
-           'NectarCAMCameraContainer',
-           'MCEventContainer',
-           'MCHeaderContainer',
-           'MCCameraEventContainer',
-           'CameraCalibrationContainer',
-           'CentralTriggerContainer',
-           'ReconstructedContainer',
-           'ReconstructedShowerContainer',
-           'ReconstructedEnergyContainer',
-           'ParticleClassificationContainer',
-           'DataContainer',
-           'TargetIODataContainer',
-           'SST1MDataContainer',
-           'HillasParametersContainer']
-
-
-class HillasParametersContainer(Container):
-    intensity = Field(nan, 'total intensity (size)')
-
-    x = Field(nan, 'centroid x coordinate')
-    y = Field(nan, 'centroid x coordinate')
-    r = Field(nan, 'radial coordinate of centroid')
-    phi = Field(nan, 'polar coordinate of centroid', unit=u.deg)
-
-    length = Field(nan, 'RMS spread along the major-axis')
-    width = Field(nan, 'RMS spread along the minor-axis')
-    psi = Field(nan, 'rotation angle of ellipse', unit=u.deg)
-
-    skewness = Field(nan, 'measure of the asymmetry')
-    kurtosis = Field(nan, 'measure of the tailedness')
+__all__ = [
+    'InstrumentContainer',
+    'R0Container',
+    'R0CameraContainer',
+    'R1Container',
+    'R1CameraContainer',
+    'DL0Container',
+    'DL0CameraContainer',
+    'DL1Container',
+    'DL1CameraContainer',
+    'TargetIOContainer',
+    'TargetIOCameraContainer',
+    'SST1MContainer',
+    'SST1MCameraContainer',
+    'LSTContainer',
+    'LSTCameraContainer',
+    'NectarCAMContainer',
+    'NectarCAMCameraContainer',
+    'MCEventContainer',
+    'MCHeaderContainer',
+    'MCCameraEventContainer',
+    'CameraCalibrationContainer',
+    'CentralTriggerContainer',
+    'ReconstructedContainer',
+    'ReconstructedShowerContainer',
+    'ReconstructedEnergyContainer',
+    'ParticleClassificationContainer',
+    'DataContainer',
+    'TargetIODataContainer',
+    'SST1MDataContainer',
+    'HillasParametersContainer',
+    'LeakageContainer',
+    'ConcentrationContainer',
+    'TimingParametersContainer',
+    'WeatherContainer',
+]
 
 
 class SST1MCameraContainer(Container):
@@ -122,10 +112,16 @@ class DL1CameraContainer(Container):
     cleaned = Field(
         None, "numpy array containing the waveform after cleaning"
     )
-    hillas_params = Field(HillasParametersContainer(),
-                          "HillasParametersContainer instance with the computed"
-                          "Hillas parameter values"
+    badpixels = Field(
+        None, "numpy (nd-)array of bools indicating (a specific type of) bad pixels"
     )
+
+
+class WeatherContainer(Container):
+    """Storage of event-wise weather information (MAGIC implementation)."""
+    air_temperature = Field(None, "Outside air temperature")
+    air_pressure = Field(None, "Outside air pressure")
+    air_humidity = Field(None, "Outside air humidity")
 
 
 class CameraCalibrationContainer(Container):
@@ -396,6 +392,8 @@ class TelescopePointingContainer(Container):
     """
     azimuth = Field(nan * u.rad, 'Azimuth, measured N->E', unit=u.rad)
     altitude = Field(nan * u.rad, 'Altitude', unit=u.rad)
+    ra = Field(nan * u.rad, 'Right ascension of camera center pointing from raw data', unit=u.rad)
+    dec = Field(nan * u.rad, 'Declination of camera center pointing from raw data', unit=u.rad)
 
 
 class DataContainer(Container):
@@ -413,6 +411,8 @@ class DataContainer(Container):
     inst = Field(InstrumentContainer(), "instrumental information (deprecated")
     pointing = Field(Map(TelescopePointingContainer),
                      'Telescope pointing positions')
+    weather = Field(Map(WeatherContainer),
+                     'Outside weather conditions at the observatory')
 
 
 class SST1MDataContainer(DataContainer):
@@ -439,6 +439,7 @@ class NectarCAMCameraContainer(Container):
             event.hiGain.integrals.gains,
             event.loGain.integrals.gains,
         ])
+
 
 
 class NectarCAMContainer(Container):
@@ -520,6 +521,8 @@ class LSTCameraContainer(Container):
     svc = Field(LSTServiceContainer(), "LST specific camera_config Information")
 
 
+
+
 class LSTContainer(Container):
     """
     Storage for the LSTCameraContainer for each telescope
@@ -530,6 +533,7 @@ class LSTContainer(Container):
     tel = Field(
         Map(LSTCameraContainer),
         "map of tel_id to LSTTelContainer")
+
 
 
 class LSTDataContainer(DataContainer):
@@ -671,3 +675,72 @@ class MuonIntensityParameter(Container):
     intensity_fit_method = Field("", 'intensity fit method')
     inputfile = Field("", 'input file')
 
+
+class HillasParametersContainer(Container):
+    intensity = Field(nan, 'total intensity (size)')
+
+    x = Field(nan, 'centroid x coordinate')
+    y = Field(nan, 'centroid x coordinate')
+    r = Field(nan, 'radial coordinate of centroid')
+    phi = Field(nan, 'polar coordinate of centroid', unit=u.deg)
+
+    length = Field(nan, 'RMS spread along the major-axis')
+    width = Field(nan, 'RMS spread along the minor-axis')
+    psi = Field(nan, 'rotation angle of ellipse', unit=u.deg)
+
+    skewness = Field(nan, 'measure of the asymmetry')
+    kurtosis = Field(nan, 'measure of the tailedness')
+
+
+class LeakageContainer(Container):
+    """
+    Leakage
+    """
+    leakage1_pixel = Field(
+        nan,
+        'Percentage of pixels after cleaning'
+        ' that are in camera border of width=1'
+    )
+    leakage2_pixel = Field(
+        nan,
+        'Percentage of pixels after cleaning'
+        ' that are in camera border of width=2'
+    )
+    leakage1_intensity = Field(
+        nan,
+        'Percentage of photo-electrons after cleaning'
+        ' that are in the camera border of width=1'
+    )
+    leakage2_intensity = Field(
+        nan,
+        'Percentage of photo-electrons after cleaning'
+        ' that are in the camera border of width=2'
+    )
+
+
+class ConcentrationContainer(Container):
+    """
+    Concentrations are ratios between light amount
+    in certain areas of the image and the full image.
+    """
+    concentration_cog = Field(
+        nan,
+        'Percentage of photo-electrons in the three pixels closest to the cog'
+    )
+    concentration_core = Field(
+        nan,
+        'Percentage of photo-electrons inside the hillas ellipse'
+    )
+    concentration_pixel = Field(
+        nan,
+        'Percentage of photo-electrons in the brightest pixel'
+    )
+
+
+class TimingParametersContainer(Container):
+    """
+    Slope and Intercept of a linear regression of the arrival times
+    along the shower main axis
+    """
+    slope = Field(nan, 'Slope of arrival times along main shower axis')
+    intercept = Field(nan, 'intercept of arrival times along main shower axis')
