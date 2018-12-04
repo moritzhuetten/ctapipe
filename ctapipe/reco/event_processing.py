@@ -670,7 +670,7 @@ class EnergyEstimatorPandas:
 
         target = shower_data_with_energy[energy_target_col].groupby(['obs_id', 'event_id']).mean().values
 
-        self.consolidating_regressor = sklearn.ensemble.RandomForestRegressor(n_estimators=10, random_state=1)
+        self.consolidating_regressor = sklearn.ensemble.RandomForestRegressor(n_estimators=10)
         self.consolidating_regressor.fit(features, target)
 
     def predict(self, shower_data, output_prefix):
