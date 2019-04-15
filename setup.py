@@ -3,7 +3,7 @@
 import sys
 
 # import ah_bootstrap
-from setuptools import setup, find_packages, Extension
+from setuptools import setup, find_packages
 
 # Get some values from the setup.cfg
 from configparser import RawConfigParser
@@ -11,12 +11,12 @@ conf = RawConfigParser()
 conf.read(['setup.cfg'])
 metadata = dict(conf.items('metadata'))
 
-PACKAGENAME = metadata.get('package_name', 'packagename')
-DESCRIPTION = metadata.get('description', 'Astropy affiliated package')
-AUTHOR = metadata.get('author', '')
-AUTHOR_EMAIL = metadata.get('author_email', '')
-LICENSE = metadata.get('license', 'unknown')
-URL = metadata.get('url', 'http://astropy.org')
+PACKAGENAME = metadata['package_name']
+DESCRIPTION = metadata['description']
+AUTHOR = metadata['author']
+AUTHOR_EMAIL = metadata['author_email']
+LICENSE = metadata['license']
+URL = metadata['url']
 
 # Get the long description from the package's docstring
 __import__(PACKAGENAME)
@@ -31,20 +31,19 @@ entry_points['console_scripts'] = [
     'ctapipe-info = ctapipe.tools.info:main',
     'ctapipe-camdemo = ctapipe.tools.camdemo:main',
     'ctapipe-dump-triggers = ctapipe.tools.dump_triggers:main',
-    'ctapipe-flow = ctapipe.flow.flow:main',
     'ctapipe-chargeres-extract = ctapipe.tools.extract_charge_resolution:main',
     'ctapipe-chargeres-plot = ctapipe.tools.plot_charge_resolution:main',
-    'ctapipe-chargeres-hist = '
-    'ctapipe.tools.plot_charge_resolution_variation_hist:main',
     'ctapipe-dump-instrument=ctapipe.tools.dump_instrument:main',
-    'ctapipe-event-viewer = ctapipe.tools.bokeh.file_viewer:main'
+    'ctapipe-event-viewer = ctapipe.tools.bokeh.file_viewer:main',
+    'ctapipe-display-tel-events = ctapipe.tools.display_events_single_tel:main',
+    'ctapipe-display-imagesums = ctapipe.tools.display_summed_images:main',
+    'ctapipe-reconstruct-muons = ctapipe.tools.muon_reconstruction:main',
+    'ctapipe-display-integration = ctapipe.tools.display_integrator:main',
+    'ctapipe-display-dl1 = ctapipe.tools.display_dl1:main',
+
 ]
 
 package.version.update_release_version()
-
-# C Extensions
-neighboursum_module = Extension('ctapipe.utils.neighbour_sum_c',
-                                sources=['ctapipe/utils/neighbour_sum_c.cc'])
 
 setup(name=PACKAGENAME,
       packages=find_packages(),
@@ -54,22 +53,27 @@ setup(name=PACKAGENAME,
       # don't need to list the sub-dependencies like numpy, since
       # astropy already depends on it)
       install_requires=[
-          'astropy>=1.3',
+          'astropy~=3.0',
           'iminuit',
           'numpy',
-          'pytest_runner',
           'scipy>=0.19',
           'tables',
           'tqdm',
           'traitlets',
           'psutil',
-          'pyhessio>=2.1',
           'matplotlib>=2.0',
           'numba',
           'pandas',
           'bokeh>=1.0.1',
+          'scikit-learn',
+          'eventio~=0.18',
       ],
-      tests_require=['pytest', 'ctapipe-extra>=0.2.11'],
+      tests_require=[
+          'pytest',
+          'ctapipe-extra>=0.2.11',
+          'pyhessio>=2.1',
+      ],
+      setup_requires=['pytest_runner'],
       author=AUTHOR,
       author_email=AUTHOR_EMAIL,
       license=LICENSE,
@@ -88,7 +92,6 @@ setup(name=PACKAGENAME,
       zip_safe=False,
       use_2to3=False,
       entry_points=entry_points,
-      ext_modules=[neighboursum_module],
       package_data={
           '': ['tools/bokeh/*.yaml', 'tools/bokeh/templates/*.html'],
       }
