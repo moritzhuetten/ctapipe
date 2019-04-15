@@ -22,6 +22,8 @@ TELESCOPE_NAMES = {
     GuessingKey(960, 15.0): GuessingResult('MST', 'HESS-I', 'HESS-I', 1),
     GuessingKey(2048, 36.0): GuessingResult('LST', 'HESS-II', 'HESS-II', 1),
     GuessingKey(1440, 4.998): GuessingResult('SST', 'FACT', 'FACT', 1),
+    GuessingKey(1039, 16.97): GuessingResult('LST', 'MAGIC', 'MAGICCam', 1),
+    GuessingKey(1039, 0.0): GuessingResult('LST', 'MAGIC', 'MAGICCamMars', 1),
 }
 
 UNKNOWN_TELESCOPE = GuessingResult('UNKNOWN', 'UNKNOWN', 'UNKNOWN', -1)
