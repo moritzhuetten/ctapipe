@@ -1,338 +1,18 @@
-
-
 import glob
+import os
 import re
 
-import h5py
 import numpy as np
 import scipy.interpolate
 
 from astropy import units as u
-from astropy.coordinates import Angle
 from astropy.time import Time
 from ctapipe.io.eventsource import EventSource
 from ctapipe.io.containers import DataContainer, TelescopePointingContainer, WeatherContainer
 from ctapipe.instrument import TelescopeDescription, SubarrayDescription, OpticsDescription, CameraGeometry
-import gzip
-import struct
 
 
-__all__ = ['MAGICEventSourceHDF5', 'MAGICEventSourceROOT']
-
-
-class MAGICEventSourceHDF5(EventSource):
-    """
-    EventSource for MAGIC raw data converted to hdf5.
-
-    This class utilises `h5py` to read the hdf5 file, and stores the
-    information into the event containers.
-    """
-    _count = 0
-
-    def __init__(self, config=None, tool=None, **kwargs):
-        super().__init__(config=config, tool=tool, **kwargs)
-
-        self.h5py = h5py
-        self.file = h5py.File(self.input_url)
-
-    @staticmethod
-    def is_compatible(file_path):
-        import h5py
-        # check general format:
-        if not h5py.is_hdf5(file_path):
-            return False
-        # crude check if hdf5 file contains MAGIC raw data:
-        with h5py.File(file_path, "r") as file:
-            intrument_attr = file.attrs['instrument']
-            if intrument_attr.tostring() == b"MAGIC":
-                return True
-            else:
-                return False
-            
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.file.close()
-
-    def _generator(self):
-        with self.h5py.File(self.input_url, "r") as input_file:
-            # the container is initialized once, and data is replaced within
-            # it after each yield
-            counter = 0
-            #eventstream = input_file.move_to_next_event()
-            data = DataContainer()
-            data.meta['origin'] = "MAGIC"
-
-            # some hessio_event_source specific parameters
-            data.meta['input_url'] = self.input_url
-            data.meta['max_events'] = self.max_events
-
-            events_per_tel = [[], []]
-
-            if not input_file.attrs['RunType'] == b"Data":
-                data.meta['is_simulation'] = True
-                dt = np.float
-            else:
-                data.meta['is_simulation'] = False
-                dt = np.int16
-                
-            # check which telescopes have data:
-            
-            if input_file.attrs['dl_export'] == b"dl1":
-                eventstream = input_file['dl1/event_id']
-                if input_file.attrs['data format'] == b"mono M1":
-                    tels_in_file = ["M1"]
-                elif input_file.attrs['data format'] == b"mono M2":
-                    tels_in_file = ["M2"]
-                elif input_file.attrs['data format'] == b"stereo":
-                    tels_in_file = ["M1", "M2"]
-                
-            elif input_file.attrs['dl_export'] == b"r0":
-                if list(input_file.keys()) == ["MAGIC1_rawdata"]:
-                    eventstream = input_file['MAGIC1_rawdata/EvtHeader/StereoEvtNumber']
-                    events_per_tel[0] = np.array(eventstream, dtype = dt)
-                    tels_in_file = [1]
-                elif list(input_file.keys()) == ["MAGIC2_rawdata"]:
-                    eventstream = input_file['MAGIC2_rawdata/EvtHeader/StereoEvtNumber']
-                    events_per_tel[1] = np.array(eventstream, dtype = dt)
-                    tels_in_file = [2]
-                elif list(input_file.keys()) == ["MAGIC1_rawdata", "MAGIC2_rawdata"]:
-                    events_per_tel[0] = np.array(input_file['MAGIC1_rawdata/EvtHeader/StereoEvtNumber'], dtype = dt)
-                    events_per_tel[1] = np.array(input_file['MAGIC2_rawdata/EvtHeader/StereoEvtNumber'], dtype = dt)
-                    tels_in_file = [1, 2]
-                    # order MC mono events into event stream:
-                    if data.meta['is_simulation'] == True:
-                        for i_tel in range(2):
-                            for i_event in range(len(events_per_tel[i_tel])):
-                                if events_per_tel[i_tel][i_event] == 0:
-                                    if i_event != 0:
-                                        events_per_tel[i_tel][i_event] = np.random.uniform(events_per_tel[i_tel][i_event - 1], np.floor(events_per_tel[i_tel][i_event - 1]) + 1)
-                                    else:
-                                        events_per_tel[i_tel][i_event] = np.random.uniform(0, 1)
-                    eventstream = np.union1d(events_per_tel[0], events_per_tel[1])
-                    
-            else:
-                raise IOError("MAGIC data level attribute 'dl_export' not found in input_file (value should be 'r0' or 'dl1').")
-            
-            optics = OpticsDescription.from_name(str(input_file['inst/subarray'].attrs['OpticsDescription'])[2:-1])
-            geom = CameraGeometry.from_name(str(input_file['inst/subarray'].attrs['CameraGeometry'])[2:-1])
-            magic_tel_description = TelescopeDescription(optics=optics, camera=geom)
-            magic_tel_descriptions = {1: magic_tel_description, 2: magic_tel_description}
-            # magic_tel_positions = {1: [input_file['inst/subarray/tel_coords']['M1'][0]*u.m, input_file['inst/subarray/tel_coords']['M1'][1]*u.m, input_file['inst/subarray/tel_coords']['M1'][2]*u.m],
-            #                        2: [input_file['inst/subarray/tel_coords']['M2'][0]*u.m, input_file['inst/subarray/tel_coords']['M2'][1]*u.m, input_file['inst/subarray/tel_coords']['M2'][2]*u.m]}
-
-            magic_tel_positions = {1: [input_file['inst/subarray/tel_coords']['M1'][0], input_file['inst/subarray/tel_coords']['M1'][1], input_file['inst/subarray/tel_coords']['M1'][2]]*u.m,
-                                   2: [input_file['inst/subarray/tel_coords']['M2'][0], input_file['inst/subarray/tel_coords']['M2'][1], input_file['inst/subarray/tel_coords']['M2'][2]]*u.m}
-
-
-
-            magic_subarray = SubarrayDescription(str(input_file.attrs['instrument'])[2:-1], magic_tel_positions, magic_tel_descriptions)
-
-            
-            for i_event, event_id in enumerate(eventstream):
-
-#                 if counter == 0:
-#                     # subarray info is only available when an event is loaded,
-#                     # so load it on the first event.
-#                     data.inst.subarray = self._build_subarray_info(input_file)
-# 
-                obs_id = input_file.attrs['RunNumber']
-                data.count = counter
-                data.r0.obs_id = input_file.attrs['RunNumber']
-                data.r0.event_id = event_id
-                data.r1.obs_id = input_file.attrs['RunNumber']
-                data.r1.event_id = event_id
-                data.dl0.obs_id = obs_id
-                data.dl0.event_id = event_id
-# 
-#                 # handle telescope filtering by taking the intersection of
-#                 # tels_with_data and allowed_tels
-#                 if len(self.allowed_tels) > 0:
-#                     selected = tels_with_data & self.allowed_tels
-#                     if len(selected) == 0:
-#                         continue  # skip event
-#                     data.r0.tels_with_data = selected
-#                     data.r1.tels_with_data = selected
-#                     data.dl0.tels_with_data = selected
-# 
-#                 data.trig.tels_with_trigger = (input_file.
-#                                                get_central_event_teltrg_list())
-#                 time_s, time_ns = input_file.get_central_event_gps_time()
-#                 data.trig.gps_time = Time(time_s * u.s, time_ns * u.ns,
-#                                           format='unix', scale='utc')
-
-#                 data.mc.alt = Angle(input_file.get_mc_shower_altitude(), u.rad)
-#                 data.mc.az = Angle(input_file.get_mc_shower_azimuth(), u.rad)
-
-#                 data.mc.x_max = input_file.get_mc_shower_xmax() * u.g / (u.cm**2)
-#                 data.mc.shower_primary_id = input_file.get_mc_shower_primary_id()
-# 
-#                 # mc run header data
-#                 data.mcheader.run_array_direction = Angle(
-#                     input_file.get_mc_run_array_direction() * u.rad
-#                 )
-# 
-#                 # this should be done in a nicer way to not re-allocate the
-#                 # data each time (right now it's just deleted and garbage
-#                 # collected)
-# 
-                data.r0.tel.clear()
-                data.r1.tel.clear()
-                data.dl0.tel.clear()
-                data.dl1.tel.clear()
-                data.mc.tel.clear()  # clear the previous telescopes
-
-                tels_with_data_tmp = np.zeros(2)
-
-                for i_tel, tel_id in enumerate(tels_in_file):
-
-                    # load r0 data:
-                    if input_file.attrs['dl_export'] == b"r0":
-                        # search event
-                        if event_id not in events_per_tel[i_tel]:
-                            nevent = -1
-                        else:
-                            nevent = np.searchsorted(events_per_tel[i_tel], event_id, side='left')
-                            tels_with_data_tmp[i_tel] = 1
-                            
-                        # sort out remaining calibration runs:
-                        if input_file['MAGIC'+str(tel_id) +'_rawdata/EvtHeader/TrigPattern']["L3 trigger"][nevent] == False:
-                            nevent = -1
-                            tels_with_data_tmp[i_tel] = 0
-    #                     # event.mc.tel[tel_id] = MCCameraContainer()
-    # 
-    #                     data.mc.tel[tel_id].dc_to_pe = input_file.get_calibration(tel_id)
-    #                     data.mc.tel[tel_id].pedestal = input_file.get_pedestal(tel_id)
-                        if nevent == -1:
-                            data.r0.tel[tel_id].waveform = None
-                        else:
-                            data.r0.tel[tel_id].waveform = input_file['MAGIC'+str(tel_id) +'_rawdata/Events'][...,nevent]
-    
-                        data.r0.tel[tel_id].image = np.sum(data.r0.tel[tel_id].waveform, axis=0)
-                        data.r0.tel[tel_id].num_trig_pix = input_file['MAGIC'+str(tel_id) +'_rawdata/EvtHeader/NumTrigLvl2'][nevent]
-                        
-                        # add MC information:
-                        if data.meta['is_simulation'] == True:
-                            # energy of event should be the same in both telescopes, so simply try both:
-                            data.mc.energy = input_file['MAGIC'+str(tel_id) +'_rawdata/McHeader/Energy']["Energy"][nevent] * u.TeV
-                            data.mc.core_x = input_file['MAGIC'+str(tel_id) +'_rawdata/McHeader/Core_xy']["Core_x"][nevent] * u.m
-                            data.mc.core_y = input_file['MAGIC'+str(tel_id) +'_rawdata/McHeader/Core_xy']["Core_y"][nevent] * u.m
-                            data.mc.h_first_int = input_file['MAGIC'+str(tel_id) +'_rawdata/McHeader/H_first_int']["H_first_int"][nevent] * u.m
-                        
-    #                     data.r0.tel[tel_id].trig_pix_id = input_file.get_trig_pixels(tel_id)
-    #                     data.mc.tel[tel_id].reference_pulse_shape = (input_file.
-    #                                                                  get_ref_shapes(tel_id))
-    #  
-    #                     nsamples = input_file.get_event_num_samples(tel_id)
-    #                     if nsamples <= 0:
-    #                         nsamples = 1
-    #                     data.r0.tel[tel_id].num_samples = nsamples
-    #  
-    #                     # load the data per telescope/pixel
-    #                     hessio_mc_npe = input_file.get_mc_number_photon_electron(tel_id)
-    #                     data.mc.tel[tel_id].photo_electron_image = hessio_mc_npe
-    #                     data.mc.tel[tel_id].meta['refstep'] = (input_file.
-    #                                                            get_ref_step(tel_id))
-    #                     data.mc.tel[tel_id].time_slice = (input_file.
-    #                                                       get_time_slice(tel_id))
-    #                     data.mc.tel[tel_id].azimuth_raw = (input_file.
-    #                                                        get_azimuth_raw(tel_id))
-    #                     data.mc.tel[tel_id].altitude_raw = (input_file.
-    #                                                         get_altitude_raw(tel_id))
-    #                     data.mc.tel[tel_id].azimuth_cor = (input_file.
-    #                                                        get_azimuth_cor(tel_id))
-    #                     data.mc.tel[tel_id].altitude_cor = (input_file.
-    #                                                         get_altitude_cor(tel_id))
-
-                    elif input_file.attrs['dl_export'] == b"dl1":
-                        tels_with_data_tmp[i_tel] = np.bool(input_file['dl1/tels_with_data'][tel_id][i_event])
-                        
-                        pointing = TelescopePointingContainer()
-                        pointing.azimuth = np.deg2rad(input_file['pointing'][tel_id + "_AzCorr"][i_event]) * u.rad
-                        pointing.altitude = np.deg2rad(input_file['pointing'][tel_id + "_AltCorr"][i_event]) * u.rad
-                        pointing.ra = np.deg2rad(input_file['pointing_radec'][tel_id + "_RaCorr"][i_event]) * u.rad
-                        pointing.dec = np.deg2rad(input_file['pointing_radec'][tel_id + "_DecCorr"][i_event]) * u.rad
-                        data.pointing[i_tel + 1] = pointing
-                        
-                        if np.bool(tels_with_data_tmp[i_tel]) == True:
-                            
-                            data.dl1.tel[i_tel + 1].image = input_file['dl1/tel' + str(i_tel + 1) + '/image'][i_event]
-                            data.dl1.tel[i_tel + 1].peakpos = input_file['dl1/tel' + str(i_tel + 1) + '/peakpos'][i_event]
-                            data.dl1.tel[i_tel + 1].badpixels = np.array(input_file['dl1/tel' + str(i_tel + 1) + '/badpixels'], dtype=np.bool)
-                            
-                        if data.meta['is_simulation'] == True:
-                            # energy of event should be the same in both telescopes, so simply try both:
-                            data.mc.energy = input_file['mc/energy']["Energy"][i_event] * u.TeV
-                            data.mc.core_x = input_file['mc/core_xy']["Core_x"][i_event] * u.m
-                            data.mc.core_y = input_file['mc/core_xy']["Core_y"][i_event] * u.m
-                            data.mc.h_first_int = input_file['mc/h_first_int']["H_first_int"][i_event] * u.m
-                        
-                # update tels_with_data:
-                if tels_with_data_tmp[0] == 1 and tels_with_data_tmp[1] == 0:
-                    tels_with_data = {1}
-                    time_tmp = Time(input_file['trig/gps_time']["M1_mjd"][i_event], scale='utc', format='mjd') + input_file['trig/gps_time']["M1_sec"][i_event] * u.s
-                elif tels_with_data_tmp[0] == 0 and tels_with_data_tmp[1] == 1:
-                    tels_with_data = {2}
-                    time_tmp = Time(input_file['trig/gps_time']["M2_mjd"][i_event], scale='utc', format='mjd') + input_file['trig/gps_time']["M2_sec"][i_event] * u.s
-                elif tels_with_data_tmp[0] == 1 and tels_with_data_tmp[1] == 1:
-                    tels_with_data = {1, 2}
-                    time_tmp = Time(input_file['trig/gps_time']["M1_mjd"][i_event], scale='utc', format='mjd') + (input_file['trig/gps_time']["M1_sec"][i_event]+input_file['trig/gps_time']["M2_sec"][i_event] )/2. * u.s
-                else:
-                    tels_with_data = {}
-                
-                weather = WeatherContainer()
-                weather.air_temperature = input_file['weather/air_temperature'][i_event] * u.deg_C
-                weather.air_pressure = input_file['weather/air_pressure'][i_event] * u.hPa
-                weather.air_humidity = input_file['weather/air_humidity'][i_event] * u.pct
-                data.weather = weather
-                
-                data.trig.gps_time = Time(time_tmp, format='unix', scale='utc', precision=9)
-                
-                data.r0.tels_with_data = tels_with_data
-                data.r1.tels_with_data = tels_with_data
-                data.dl0.tels_with_data = tels_with_data
-                data.trig.tels_with_trigger = tels_with_data
-                data.inst.subarray = magic_subarray
-                
-                yield data
-                counter += 1
-
-    def _build_subarray_info(self, file):
-        """
-        constructs a SubarrayDescription object from the info in an
-        EventIO/HESSSIO file
-
-        Parameters
-        ----------
-        file: HessioFile
-            The open pyhessio file
-
-        Returns
-        -------
-        SubarrayDescription :
-            instrumental information
-        """
-        telescope_ids = list(file.get_telescope_ids())
-        subarray = SubarrayDescription("MonteCarloArray")
-
-        for tel_id in telescope_ids:
-            try:
-
-                pix_pos = file.get_pixel_position(tel_id) * u.m
-                foclen = file.get_optical_foclen(tel_id) * u.m
-                mirror_area = file.get_mirror_area(tel_id) * u.m ** 2
-                num_tiles = file.get_mirror_number(tel_id)
-                tel_pos = file.get_telescope_position(tel_id) * u.m
-
-                tel = TelescopeDescription.guess(*pix_pos,
-                                                 equivalent_focal_length=foclen)
-                tel.optics.mirror_area = mirror_area
-                tel.optics.num_mirror_tiles = num_tiles
-                subarray.tels[tel_id] = tel
-                subarray.positions[tel_id] = tel_pos
-
-            except self.pyhessio.HessioGeneralError:
-                pass
-
-        return subarray
+__all__ = ['MAGICEventSourceROOT']
 
 
 class MAGICEventSourceROOT(EventSource):
@@ -364,6 +44,15 @@ class MAGICEventSourceROOT(EventSource):
             the 'input_url' parameter.
         """
 
+        self.file_list = glob.glob(kwargs['input_url'])
+        self.file_list.sort()
+
+        # EventSource can not handle file wild cards as input_url
+        # To overcome this we substitute the input_url with first file matching
+        # the specified file mask.
+        del kwargs['input_url']
+        super().__init__(config=config, tool=tool, input_url=self.file_list[0], **kwargs)
+
         try:
             import uproot
         except ImportError:
@@ -371,17 +60,8 @@ class MAGICEventSourceROOT(EventSource):
             self.log.error(msg)
             raise
 
-        file_list = glob.glob(kwargs['input_url'])
-        file_list.sort()
-
-        # EventSource can not handle file wild cards as input_url
-        # To overcome this we substitute the input_url with first file matching
-        # the specified file mask.
-        del kwargs['input_url']
-        super().__init__(config=config, tool=tool, input_url=file_list[0], **kwargs)
-
         # Retrieving the list of run numbers corresponding to the data files
-        run_numbers = list(map(self._get_run_number, file_list))
+        run_numbers = list(map(self._get_run_number, self.file_list))
         self.run_numbers = np.unique(run_numbers)
 
         # # Setting up the current run with the first run present in the data
@@ -419,8 +99,6 @@ class MAGICEventSourceROOT(EventSource):
 
         """
 
-        is_magic_root_file = True
-
         file_list = glob.glob(file_mask)
 
         for file_path in file_list:
@@ -430,17 +108,16 @@ class MAGICEventSourceROOT(EventSource):
                 try:
                     with uproot.open(file_path) as input_data:
                         if 'Events' not in input_data:
-                            is_magic_root_file = False
+                            return False
                 except ValueError:
                     # uproot raises ValueError if the file is not a ROOT file
-                    is_magic_root_file = False
-                    pass
+                    return False
 
             except ImportError:
                 if re.match('.+_m\d_.+root', file_path.lower()) is None:
-                    is_magic_root_file = False
+                    return False
 
-        return is_magic_root_file
+        return True
 
     @staticmethod
     def _get_run_number(file_name):
@@ -483,13 +160,15 @@ class MAGICEventSourceROOT(EventSource):
 
         """
 
-        input_path = '/'.join(self.input_url.split('/')[:-1])
-        this_run_mask = input_path + '/*{:d}*root'.format(run_number)
+        input_path = os.path.dirname(self.input_url)
+        this_run_mask = os.path.join(input_path, '*{:d}*root'.format(run_number))
+        this_run_files = glob.glob(this_run_mask)
+        this_run_files = list(filter(lambda name: name in self.file_list, this_run_files))
 
         run = dict()
         run['number'] = run_number
         run['read_events'] = 0
-        run['data'] = MarsDataRun(run_file_mask=this_run_mask)
+        run['data'] = MarsDataRun(run_file_list=this_run_files)
 
         return run
 
@@ -503,9 +182,9 @@ class MAGICEventSourceROOT(EventSource):
 
         """
 
-        return self._stereo_event_generator()
+        return self.iter_stereo_events()
 
-    def _stereo_event_generator(self):
+    def iter_stereo_events(self):
         """
         Stereo event generator. Yields DataContainer instances, filled
         with the read event data.
@@ -527,26 +206,28 @@ class MAGICEventSourceROOT(EventSource):
         tels_in_file = ["m1", "m2"]
         tels_with_data = {1, 2}
 
+        current_run = None
+
         # Loop over the available data runs
         for run_number in self.run_numbers:
 
             # Removing the previously read data run from memory
-            if self.current_run is not None:
-                if 'data' in self.current_run:
-                    del self.current_run['data']
+            if current_run is not None:
+                if 'data' in current_run:
+                    del current_run['data']
 
             # Setting the new active run
-            self.current_run = self._set_active_run(run_number)
+            current_run = self._set_active_run(run_number)
 
             # Loop over the events
-            for event_i in range(self.current_run['data'].n_stereo_events):
+            for event_i in range(current_run['data'].n_stereo_events):
                 # Event and run ids
-                event_order_number = self.current_run['data'].stereo_ids[event_i][0]
-                event_id = self.current_run['data'].event_data['M1']['stereo_event_number'][event_order_number]
-                obs_id = self.current_run['number']
+                event_order_number = current_run['data'].stereo_ids[event_i][0]
+                event_id = current_run['data'].event_data['M1']['stereo_event_number'][event_order_number]
+                obs_id = current_run['number']
 
                 # Reading event data
-                event_data = self.current_run['data'].get_stereo_event_data(event_i)
+                event_data = current_run['data'].get_stereo_event_data(event_i)
 
                 # Event counter
                 data.count = counter
@@ -602,7 +283,7 @@ class MAGICEventSourceROOT(EventSource):
 
         return
 
-    def _mono_event_generator(self, telescope):
+    def iter_mono_events(self, telescope):
         """
         Mono event generator. Yields DataContainer instances, filled
         with the read event data.
@@ -635,31 +316,33 @@ class MAGICEventSourceROOT(EventSource):
         tel_i = tels_in_file.index(telescope)
         tels_with_data = {tel_i + 1, }
 
+        current_run = None
+
         # Loop over the available data runs
         for run_number in self.run_numbers:
 
             # Removing the previously read data run from memory
-            if self.current_run is not None:
-                if 'data' in self.current_run:
-                    del self.current_run['data']
+            if current_run is not None:
+                if 'data' in current_run:
+                    del current_run['data']
 
             # Setting the new active run
-            self.current_run = self._set_active_run(run_number)
+            current_run = self._set_active_run(run_number)
 
             if telescope == 'M1':
-                n_events = self.current_run['data'].n_mono_events_m1
+                n_events = current_run['data'].n_mono_events_m1
             else:
-                n_events = self.current_run['data'].n_mono_events_m2
+                n_events = current_run['data'].n_mono_events_m2
 
             # Loop over the events
             for event_i in range(n_events):
                 # Event and run ids
-                event_order_number = self.current_run['data'].mono_ids[telescope][event_i]
-                event_id = self.current_run['data'].event_data[telescope]['stereo_event_number'][event_order_number]
-                obs_id = self.current_run['number']
+                event_order_number = current_run['data'].mono_ids[telescope][event_i]
+                event_id = current_run['data'].event_data[telescope]['stereo_event_number'][event_order_number]
+                obs_id = current_run['number']
 
                 # Reading event data
-                event_data = self.current_run['data'].get_mono_event_data(event_i, telescope=telescope)
+                event_data = current_run['data'].get_mono_event_data(event_i, telescope=telescope)
 
                 # Event counter
                 data.count = counter
@@ -713,7 +396,7 @@ class MAGICEventSourceROOT(EventSource):
 
         return
 
-    def _pedestal_event_generator(self, telescope):
+    def iter_pedestal_events(self, telescope):
         """
         Pedestal event generator. Yields DataContainer instances, filled
         with the read event data.
@@ -746,31 +429,33 @@ class MAGICEventSourceROOT(EventSource):
         tel_i = tels_in_file.index(telescope)
         tels_with_data = {tel_i + 1, }
 
+        current_run = None
+
         # Loop over the available data runs
         for run_number in self.run_numbers:
 
             # Removing the previously read data run from memory
-            if self.current_run is not None:
-                if 'data' in self.current_run:
-                    del self.current_run['data']
+            if current_run is not None:
+                if 'data' in current_run:
+                    del current_run['data']
 
             # Setting the new active run
-            self.current_run = self._set_active_run(run_number)
+            current_run = self._set_active_run(run_number)
 
             if telescope == 'M1':
-                n_events = self.current_run['data'].n_pedestal_events_m1
+                n_events = current_run['data'].n_pedestal_events_m1
             else:
-                n_events = self.current_run['data'].n_pedestal_events_m2
+                n_events = current_run['data'].n_pedestal_events_m2
 
             # Loop over the events
             for event_i in range(n_events):
                 # Event and run ids
-                event_order_number = self.current_run['data'].pedestal_ids[telescope][event_i]
-                event_id = self.current_run['data'].event_data[telescope]['stereo_event_number'][event_order_number]
-                obs_id = self.current_run['number']
+                event_order_number = current_run['data'].pedestal_ids[telescope][event_i]
+                event_id = current_run['data'].event_data[telescope]['stereo_event_number'][event_order_number]
+                obs_id = current_run['number']
 
                 # Reading event data
-                event_data = self.current_run['data'].get_pedestal_event_data(event_i, telescope=telescope)
+                event_data = current_run['data'].get_pedestal_event_data(event_i, telescope=telescope)
 
                 # Event counter
                 data.count = counter
@@ -830,19 +515,19 @@ class MarsDataRun:
     This class implements reading of the event data from a single MAGIC data run.
     """
 
-    def __init__(self, run_file_mask):
+    def __init__(self, run_file_list):
         """
         Constructor of the class. Defines the run to use and the camera pixel arrangement.
 
         Parameters
         ----------
-        run_file_mask: str
-            A path mask for files belonging to the run. Must correspond to a single run
+        run_file_list: list
+            A list of files belonging to the run. Must correspond to a single run
             or an exception will be raised. Must correspond to calibrated ("sorcerer"-level)
             data.
         """
 
-        self.run_file_mask = run_file_mask
+        self.run_file_list = run_file_list
 
         # Loading the camera geometry
         camera_geometry = CameraGeometry.from_name('MAGICCam')
@@ -851,14 +536,13 @@ class MarsDataRun:
         self.n_camera_pixels = len(self.camera_pixel_x)
 
         # Preparing the lists of M1/2 data files
-        file_list = glob.glob(run_file_mask)
-        self.m1_file_list = list(filter(lambda name: '_M1_' in name, file_list))
+        self.m1_file_list = list(filter(lambda name: '_M1_' in name, self.run_file_list))
         self.m1_file_list.sort()
-        self.m2_file_list = list(filter(lambda name: '_M2_' in name, file_list))
+        self.m2_file_list = list(filter(lambda name: '_M2_' in name, self.run_file_list))
         self.m2_file_list.sort()
 
         # Retrieving the list of run numbers corresponding to the data files
-        run_numbers = list(map(self._get_run_number, file_list))
+        run_numbers = list(map(self._get_run_number, self.run_file_list))
         run_numbers = np.unique(run_numbers)
 
         # Checking if a single run is going to be read

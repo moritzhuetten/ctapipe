@@ -7,9 +7,22 @@ Contact: Tino Michael <Tino.Michael@cea.fr>
 
 from ctapipe.reco.reco_algorithms import Reconstructor
 from ctapipe.io.containers import ReconstructedShowerContainer
-from ctapipe.coordinates import HorizonFrame, CameraFrame, GroundFrame, TiltedGroundFrame, project_to_ground
-from astropy.coordinates import SkyCoord, spherical_to_cartesian, cartesian_to_spherical
 from itertools import combinations
+
+from ctapipe.coordinates import (
+    CameraFrame,
+    GroundFrame,
+    TiltedGroundFrame,
+    project_to_ground,
+    MissingFrameAttributeWarning,
+)
+from astropy.coordinates import (
+    SkyCoord,
+    spherical_to_cartesian,
+    cartesian_to_spherical,
+    AltAz,
+)
+import warnings
 
 import numpy as np
 
@@ -88,8 +101,8 @@ class HillasReconstructor(Reconstructor):
 
     """
 
-    def __init__(self, config=None, tool=None, **kwargs):
-        super().__init__(config=config, parent=tool, **kwargs)
+    def __init__(self, config=None, parent=None, **kwargs):
+        super().__init__(config=config, parent=parent, **kwargs)
         self.hillas_planes = {}
 
     def predict(self, hillas_dict, inst, pointing_alt, pointing_az):
@@ -118,6 +131,9 @@ class HillasReconstructor(Reconstructor):
             if len(hillas_dict) < 2
         '''
 
+        # filter warnings for missing obs time. this is needed because MC data has no obs time
+        warnings.filterwarnings(action='ignore', category=MissingFrameAttributeWarning)
+
         # stereoscopy needs at least two telescopes
         if len(hillas_dict) < 2:
             raise TooFewTelescopesException(
@@ -137,11 +153,11 @@ class HillasReconstructor(Reconstructor):
         alt = u.Quantity(list(pointing_alt.values()))
         az = u.Quantity(list(pointing_az.values()))
         if np.any(alt != alt[0]) or np.any(az != az[0]):
-            raise ValueError('Divergent pointing not supported')
+            warnings.warn('Divergent pointing not supported')
 
-        pointing_direction = SkyCoord(alt=alt[0], az=az[0], frame='altaz')
+        telescope_pointing = SkyCoord(alt=alt[0], az=az[0], frame=AltAz())
         # core position estimate using a geometric approach
-        core_pos = self.estimate_core_position(hillas_dict, pointing_direction)
+        core_pos = self.estimate_core_position(hillas_dict, telescope_pointing)
 
         # container class for reconstructed showers
         result = ReconstructedShowerContainer()
@@ -158,7 +174,7 @@ class HillasReconstructor(Reconstructor):
         result.core_uncert = np.nan
 
         result.tel_ids = [h for h in hillas_dict.keys()]
-        result.average_size = np.mean([h.intensity for h in hillas_dict.values()])
+        result.average_intensity = np.mean([h.intensity for h in hillas_dict.values()])
         result.is_valid = True
 
         result.alt_uncert = err_est_dir
@@ -193,8 +209,8 @@ class HillasReconstructor(Reconstructor):
             dictionaries of the orientation angles of the telescopes
             needs to contain at least the same keys as in `hillas_dict`
         """
-
         self.hillas_planes = {}
+        horizon_frame = AltAz()
         for tel_id, moments in hillas_dict.items():
             # we just need any point on the main shower axis a bit away from the cog
             p2_x = moments.x + 0.1 * u.m * np.cos(moments.psi)
@@ -204,24 +220,23 @@ class HillasReconstructor(Reconstructor):
             pointing = SkyCoord(
                 alt=pointing_alt[tel_id],
                 az=pointing_az[tel_id],
-                frame='altaz'
+                frame=horizon_frame,
             )
 
-            hf = HorizonFrame(
-                array_direction=pointing,
-                pointing_direction=pointing
-            )
-            cf = CameraFrame(
+            camera_frame = CameraFrame(
                 focal_length=focal_length,
-                array_direction=pointing,
-                pointing_direction=pointing,
+                telescope_pointing=pointing
             )
 
-            cog_coord = SkyCoord(x=moments.x, y=moments.y, frame=cf)
-            cog_coord = cog_coord.transform_to(hf)
+            cog_coord = SkyCoord(
+                x=moments.x,
+                y=moments.y,
+                frame=camera_frame,
+            )
+            cog_coord = cog_coord.transform_to(horizon_frame)
 
-            p2_coord = SkyCoord(x=p2_x, y=p2_y, frame=cf)
-            p2_coord = p2_coord.transform_to(hf)
+            p2_coord = SkyCoord(x=p2_x, y=p2_y, frame=camera_frame)
+            p2_coord = p2_coord.transform_to(horizon_frame)
 
             circle = HillasPlane(
                 p1=cog_coord,
@@ -269,7 +284,7 @@ class HillasReconstructor(Reconstructor):
 
         return result, err_est_dir
 
-    def estimate_core_position(self, hillas_dict, pointing_direction):
+    def estimate_core_position(self, hillas_dict, telescope_pointing):
         '''
         Estimate the core position by intersection the major ellipse lines of each telescope.
 
@@ -277,7 +292,7 @@ class HillasReconstructor(Reconstructor):
         -----------
         hillas_dict: dict[HillasContainer]
             dictionary of hillas moments
-        pointing_direction: SkyCoord[AltAz]
+        telescope_pointing: SkyCoord[AltAz]
             Pointing direction of the array
 
         Returns
@@ -292,8 +307,8 @@ class HillasReconstructor(Reconstructor):
         z = np.zeros(len(psi))
         uvw_vectors = np.column_stack([np.cos(psi).value, np.sin(psi).value, z])
 
-        tilted_frame = TiltedGroundFrame(pointing_direction=pointing_direction)
-        ground_frame = GroundFrame(pointing_direction=pointing_direction)
+        tilted_frame = TiltedGroundFrame(pointing_direction=telescope_pointing)
+        ground_frame = GroundFrame()
 
         positions = [
             (
@@ -358,10 +373,10 @@ class HillasPlane:
         -----------
         p1: astropy.coordinates.SkyCoord
             One of two direction vectors which define the plane.
-            This coordinate has to be defined in the ctapipe.coordinates.HorizonFrame
+            This coordinate has to be defined in the ctapipe.coordinates.AltAz
         p2: astropy.coordinates.SkyCoord
             One of two direction vectors which define the plane.
-            This coordinate has to be defined in the ctapipe.coordinates.HorizonFrame
+            This coordinate has to be defined in the ctapipe.coordinates.AltAz
         telescope_position: np.array(3)
             Position of the telescope on the ground
         weight : float, optional
