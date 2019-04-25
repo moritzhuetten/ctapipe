@@ -2,8 +2,14 @@ import warnings
 import numpy as np
 from bokeh.plotting import figure
 from bokeh.events import Tap
-from bokeh.models import (ColumnDataSource, TapTool, palettes, Span, ColorBar,
-                          LinearColorMapper)
+from bokeh import palettes
+from bokeh.models import (
+    ColumnDataSource,
+    TapTool,
+    Span,
+    ColorBar,
+    LinearColorMapper,
+)
 from ctapipe.utils.rgbtohex import intensity_to_hex
 
 PLOTARGS = dict(tools="", toolbar_location=None, outline_line_color='#595959')
@@ -213,8 +219,8 @@ class CameraDisplay:
         self.cdsource.selected.on_change('indices', source_change_response)
 
     def _on_pixel_click(self, pix_id):
-        print("Clicked pixel_id: {}".format(pix_id))
-        print("Active Pixels: {}".format(self.active_pixels))
+        print(f"Clicked pixel_id: {pix_id}")
+        print(f"Active Pixels: {self.active_pixels}")
 
     def highlight_pixels(self):
         alpha = [0] * self._n_pixels
@@ -375,5 +381,5 @@ class WaveformDisplay:
         self.fig.on_event(Tap, wf_tap_response)
 
     def _on_waveform_click(self, time):
-        print("Clicked time: {}".format(time))
-        print("Active time: {}".format(self.active_time))
+        print(f"Clicked time: {time}")
+        print(f"Active time: {self.active_time}")
