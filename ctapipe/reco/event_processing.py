@@ -10,7 +10,7 @@ import pandas as pd
 import joblib
 
 from ctapipe.image import tailcuts_clean, hillas_parameters
-from ctapipe.io import EventSourceFactory
+from ctapipe.io import event_source
 from ctapipe.io.containers import ReconstructedContainer, ReconstructedEnergyContainer, ParticleClassificationContainer
 from ctapipe.reco import EnergyRegressor
 from ctapipe.reco.HillasReconstructor import TooFewTelescopesException
@@ -401,8 +401,8 @@ class EventProcessor:
 
         """
 
-        with EventSourceFactory.produce(input_url=file_name) as event_factory:
-            event_generator = event_factory._generator()
+        with event_source(input_url=file_name) as source:
+            event_generator = source._generator()
 
             if not append_to_existing_events:
                 self.events = []
