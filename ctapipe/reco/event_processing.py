@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import astropy.units as u
 from copy import deepcopy
@@ -14,6 +15,11 @@ from ctapipe.io import event_source
 from ctapipe.io.containers import ReconstructedContainer, ReconstructedEnergyContainer, ParticleClassificationContainer
 from ctapipe.reco import EnergyRegressor
 from ctapipe.reco.HillasReconstructor import TooFewTelescopesException
+
+from ctapipe.coordinates import CameraFrame, TelescopeFrame
+from astropy.coordinates import AltAz, SkyCoord
+from astropy import units as u
+from astropy.coordinates.angle_utilities import angular_separation, position_angle
 
 
 class HillasFeatureSelector(ABC):
@@ -1153,3 +1159,364 @@ class DirectionEstimatorPandas:
         self.target_name = data['target_name']
         self.telescope_regressors = data['telescope_regressors']
         self.consolidating_regressor = data['consolidating_regressor']
+
+
+class DirectionStereoEstimatorPandas:
+    """
+    This class trains/applies the random forest regressor for event direction,
+    using the event parameters, stored in a Pandas data frame.
+    It trains a separate regressor for each telescope. Further outputs of these
+    regressors are combined to deliver the average predictions.
+    """
+
+    def __init__(self, feature_names, tel_descriptions, **rf_settings):
+        """
+        Constructor. Gets basic settings.
+
+        Parameters
+        ----------
+        feature_names: dict
+            Feature names (str type) to be used by the regressor. Must correspond to the
+            columns of the data frames that will be processed. Must be a dict with the keys
+            "disp" and "pos_angle", each containing the corresponding feature lists.
+        tel_descriptions: dict
+            A dictionary of the ctapipe.instrument.TelescopeDescription instances, covering
+            the telescopes used to record the data.
+        rf_settings: dict
+            A dictionary of the parameters to be transferred to regressors
+            (sklearn.ensemble.RandomForestRegressor).
+        """
+
+        self.feature_names = feature_names
+        self.telescope_descriptions = tel_descriptions
+
+        self.rf_settings = rf_settings
+
+        self.telescope_regressors = dict(disp={}, pos_angle={})
+
+    @staticmethod
+    def _get_tel_ids(shower_data):
+        """
+        Retrieves the telescope IDs from the input data frame.
+
+        Parameters
+        ----------
+        shower_data: pd.DataFrame
+            A data frame with the event properties.
+
+        Returns
+        -------
+        set:
+            Telescope IDs.
+
+        """
+
+        tel_ids = set()
+
+        for column in shower_data:
+            parse = re.findall(r".*_(\d)", column)
+            if parse:
+                tel_ids.add(int(parse[0]))
+
+        return tel_ids
+
+    def _get_disp_and_position_angle(self, shower_data):
+        """
+        Computes the displacement and its position angle between the event
+        shower image and its original coordinates.
+
+        Parameters
+        ----------
+        shower_data: pd.DataFrame
+            A data frame with the event properties.
+
+        Returns
+        -------
+        dict:
+            - disp: dict
+                Computed displacement in radians. Keys - telescope IDs.
+            - pos_angle: dict
+                Computed displacement position angles in radians. Keys - telescope IDs.
+
+        """
+
+        result = {'disp': {}, 'pos_angle': {}}
+
+        for tel_id in self._get_tel_ids(shower_data):
+            optics = self.telescope_descriptions[tel_id].optics
+            camera = self.telescope_descriptions[tel_id].camera
+
+            tel_pointing = AltAz(alt=shower_data[f'tel_alt_{tel_id:d}'].values * u.rad,
+                                 az=shower_data[f'tel_az_{tel_id:d}'].values * u.rad)
+
+            camera_frame = CameraFrame(focal_length=optics.equivalent_focal_length,
+                                       rotation=camera.cam_rotation)
+
+            telescope_frame = TelescopeFrame(telescope_pointing=tel_pointing)
+
+            camera_coord = SkyCoord(shower_data[f'x_{tel_id:d}'].values * u.m,
+                                    shower_data[f'y_{tel_id:d}'].values * u.m,
+                                    frame=camera_frame)
+            shower_coord_in_telescope = camera_coord.transform_to(telescope_frame)
+
+            event_coord = SkyCoord(shower_data[f'true_az_{tel_id:d}'].values * u.rad,
+                                   shower_data[f'true_alt_{tel_id:d}'].values * u.rad,
+                                   frame=AltAz())
+            event_coord_in_telescope = event_coord.transform_to(telescope_frame)
+
+            disp = angular_separation(shower_coord_in_telescope.altaz.az,
+                                      shower_coord_in_telescope.altaz.alt,
+                                      event_coord_in_telescope.altaz.az,
+                                      event_coord_in_telescope.altaz.alt)
+
+            pos_angle = shower_coord_in_telescope.position_angle(event_coord)
+
+            result['disp'][tel_id] = disp.to(u.rad).value
+            result['pos_angle'][tel_id] = pos_angle.value
+
+        return result
+
+    def _get_per_telescope_features(self, shower_data, feature_names):
+        """
+        Extracts the shower features specific to each telescope of
+        the available ones.
+
+        Parameters
+        ----------
+        shower_data: pandas.DataFrame
+            Data frame with the shower parameters.
+
+        Returns
+        -------
+        output: dict
+            Shower features for each telescope (keys - telescope IDs).
+
+        """
+
+        tel_ids = self._get_tel_ids(shower_data)
+
+        features = dict()
+
+        for tel_id in tel_ids:
+            tel_feature_names = [name + f'_{tel_id:d}' for name in feature_names]
+
+            this_telescope = shower_data[tel_feature_names]
+            this_telescope = this_telescope.dropna()
+
+            features[tel_id] = this_telescope[tel_feature_names].values
+
+        return features
+
+    def _train_per_telescope_rf(self, shower_data, disp_pa, target_name):
+        """
+        Trains the regressors for each of the available telescopes.
+
+        Parameters
+        ----------
+        shower_data: pandas.DataFrame
+            Data frame with the shower parameters.
+        disp_pa: dict
+            A dictionary with the keys "disp" and "pos_angle", containing
+            the target disp and pos_angle values.
+        target_name: str
+            The name of the target variable. Must one of the keys of disp_pa.
+
+        Returns
+        -------
+        dict:
+            A dictionary of sklearn.ensemble.RandomForestRegressor instances.
+            Keys - telescope IDs.
+
+        """
+
+        features = self._get_per_telescope_features(shower_data, self.feature_names[target_name])
+        targets = disp_pa[target_name]
+
+        tel_ids = features.keys()
+
+        telescope_regressors = dict()
+
+        for tel_id in tel_ids:
+            print(f"Working on telescope {tel_id:d}")
+            x_train = features[tel_id]
+            y_train = targets[tel_id]
+
+            regressor = sklearn.ensemble.RandomForestRegressor(**self.rf_settings)
+            regressor.fit(x_train, y_train)
+
+            telescope_regressors[tel_id] = regressor
+
+        return telescope_regressors
+
+    def _apply_per_telescope_rf(self, shower_data):
+        """
+        Applies the regressors, trained per each telescope.
+
+        Parameters
+        ----------
+        shower_data: pandas.DataFrame
+            Data frame with the shower parameters.
+
+        Returns
+        -------
+        dict:
+            Dictionary with predictions for "disp" and "pos_angle".
+            Internal keys - telescope IDs.
+
+        """
+
+        predictions = dict(disp={}, pos_angle={})
+
+        for kind in predictions:
+            features = self._get_per_telescope_features(shower_data, self.feature_names[kind])
+            tel_ids = features.keys()
+
+            for tel_id in tel_ids:
+                predictions[kind][tel_id] = self.telescope_regressors[kind][tel_id].predict(features[tel_id])
+
+        return predictions
+
+    def fit(self, shower_data):
+        """
+        Fits the regressor model.
+
+        Parameters
+        ----------
+        shower_data: pandas.DataFrame
+            Data frame with the shower parameters.
+
+        Returns
+        -------
+        None
+
+        """
+
+        disp_pa = self._get_disp_and_position_angle(shower_data)
+
+        print('Training "disp" RFs...')
+        self.telescope_regressors['disp'] = self._train_per_telescope_rf(shower_data, disp_pa, 'disp')
+        print('Training "PA" RFs...')
+        self.telescope_regressors['pos_angle'] = self._train_per_telescope_rf(shower_data, disp_pa, 'pos_angle')
+
+    def predict(self, shower_data, output_suffix='reco'):
+        """
+        Applies the trained regressor to the data.
+
+        Parameters
+        ----------
+        shower_data: pandas.DataFrame
+            Data frame with the shower parameters.
+        output_suffix: str, optional
+            Suffix to use with the data frame columns, that will host the regressors
+            predictions. Columns will have names "{param_name}_{tel_id}_{output_suffix}".
+            Defaults to 'reco'.
+
+        Returns
+        -------
+        pandas.DataFrame:
+            Data frame with the computed shower coordinates.
+
+        """
+
+        disp_pa_reco = self._apply_per_telescope_rf(shower_data)
+
+        coords_reco = dict()
+        event_coord_reco = dict()
+
+        tel_ids = list(self._get_tel_ids(shower_data))
+
+        for tel_id in tel_ids:
+            optics = self.telescope_descriptions[tel_id].optics
+            camera = self.telescope_descriptions[tel_id].camera
+
+            tel_pointing = AltAz(alt=shower_data[f'tel_alt_{tel_id:d}'].values * u.rad,
+                                 az=shower_data[f'tel_az_{tel_id:d}'].values * u.rad)
+
+            camera_frame = CameraFrame(focal_length=optics.equivalent_focal_length,
+                                       rotation=camera.cam_rotation)
+
+            telescope_frame = TelescopeFrame(telescope_pointing=tel_pointing)
+
+            camera_coord = SkyCoord(shower_data[f'x_{tel_id:d}'].values * u.m,
+                                    shower_data[f'y_{tel_id:d}'].values * u.m,
+                                    frame=camera_frame)
+            shower_coord_in_telescope = camera_coord.transform_to(telescope_frame)
+
+            disp_reco = disp_pa_reco['disp'][tel_id] * u.rad
+            position_angle_reco = disp_pa_reco['pos_angle'][tel_id] * u.rad
+
+            event_coord_reco[tel_id] = shower_coord_in_telescope.directional_offset_by(position_angle_reco, disp_reco)
+
+            coords_reco[f'alt_{tel_id:d}_{output_suffix:s}'] = event_coord_reco[tel_id].altaz.alt.to(u.rad).value
+            coords_reco[f'az_{tel_id:d}_{output_suffix:s}'] = event_coord_reco[tel_id].altaz.az.to(u.rad).value
+
+        # ------------------------------
+        # *** Computing the midpoint ***
+        for tel_id in tel_ids:
+            event_coord_reco[tel_id] = SkyCoord(coords_reco[f'az_{tel_id:d}_{output_suffix:s}'] * u.rad,
+                                                coords_reco[f'alt_{tel_id:d}_{output_suffix:s}'] * u.rad,
+                                                frame=AltAz())
+
+        data = [event_coord_reco[tel_id].data for tel_id in tel_ids]
+
+        midpoint_data = data[0]
+        for d in data[1:]:
+            midpoint_data += d
+        midpoint_data /= len(data)
+
+        event_coord_reco[-1] = SkyCoord(midpoint_data, representation_type='unitspherical', frame=AltAz())
+
+        coords_reco[f'alt_{output_suffix:s}'] = event_coord_reco[-1].altaz.alt.to(u.rad).value
+        coords_reco[f'az_{output_suffix:s}'] = event_coord_reco[-1].altaz.az.to(u.rad).value
+        # ------------------------------
+
+        coord_df = pd.DataFrame.from_dict(coords_reco)
+        coord_df.index = shower_data.index
+
+        return coord_df
+
+    def save(self, file_name):
+        """
+        Saves trained regressors to the specified joblib file.
+
+        Parameters
+        ----------
+        file_name: str
+            Output file name.
+
+        Returns
+        -------
+        None
+
+        """
+
+        output = dict()
+        output['rf_settings'] = self.rf_settings
+        output['feature_names'] = self.feature_names
+        output['telescope_descriptions'] = self.telescope_descriptions
+        output['telescope_regressors'] = self.telescope_regressors
+
+        joblib.dump(output, file_name)
+
+    def load(self, file_name):
+        """
+        Loads pre-trained regressors to the specified joblib file.
+
+        Parameters
+        ----------
+        file_name: str
+            Output file name.
+
+        Returns
+        -------
+        None
+
+        """
+
+        data = joblib.load(file_name)
+
+        self.rf_settings = data['rf_settings']
+        self.feature_names = data['feature_names']
+        self.telescope_regressors = data['telescope_regressors']
+        self.telescope_descriptions = data['telescope_descriptions']
+
