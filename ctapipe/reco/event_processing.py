@@ -1070,6 +1070,7 @@ class DirectionEstimatorPandas:
 
         return direction_reco
 
+    # TODO: remove this method - not used
     def _get_per_telescope_features(self, shower_data):
         """
         Extracts the shower features specific to each telescope of
@@ -1121,7 +1122,8 @@ class DirectionEstimatorPandas:
 
         Returns
         -------
-        dict
+        dict:
+            Regressors for each of the telescopes. Keys - telescope IDs.
 
         """
 
@@ -1156,22 +1158,21 @@ class DirectionEstimatorPandas:
         Parameters
         ----------
         shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
-        output_prefix: str, optional
-            Prefix to the new data frame columns, that will host the regressors
-            predictions. Columns will have names "{base_output_name}_{tel_id}".
-            Defaults to 'est_energy'.
+            Data frame with the shower parameters. Must contain columns from self.feature_names.
 
         Returns
         -------
         pandas.DataFrame:
-            Updated data frame with the computed shower energies.
+            Data frame with the computed shower directions. It also contains the "displacement"
+            ("disp_reco") of this direction w.r.t. the shower image center and its position angle
+            ("pos_angle_reco").
 
         """
 
         tel_ids = shower_data.index.levels[2]
 
+        # -----------------------------------------
+        # *** Computing disp and position angle ***
         predictions = pd.DataFrame()
 
         prediction_list = []
@@ -1180,12 +1181,15 @@ class DirectionEstimatorPandas:
             pred_ = pd.DataFrame()
 
             for tel_id in tel_ids:
+                # Selecting data
                 this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), self.feature_names[kind]]
                 this_telescope = this_telescope.dropna()
                 features = this_telescope.values
 
+                # Getting the RF response
                 response = self.telescope_regressors[kind][tel_id].predict(features)
 
+                # Storing to a data frame
                 name = f'{kind:s}_reco'
                 df = pd.DataFrame(data={name: response}, index=this_telescope.index)
 
@@ -1197,22 +1201,29 @@ class DirectionEstimatorPandas:
             pred_.sort_index(inplace=True)
             prediction_list.append(pred_)
 
+        # Merging the resulting data frames
         for pred_ in prediction_list:
             if predictions.empty:
                 predictions = predictions.append(pred_)
             else:
                 predictions = predictions.join(pred_)
 
+        # Merging with input for an easier reference
         shower_data = shower_data.join(predictions)
+        # -----------------------------------------
 
+        # -----------------------------
+        # Computing the sky coordinates
         direction_reco = pd.DataFrame()
 
         for tel_id in tel_ids:
             optics = self.telescope_descriptions[tel_id].optics
             camera = self.telescope_descriptions[tel_id].camera
 
+            # Selecting events from this telescope
             this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), shower_data.columns]
 
+            # Definining the coordinate systems
             tel_pointing = AltAz(alt=this_telescope['tel_alt'].values * u.rad,
                                  az=this_telescope['tel_az'].values * u.rad)
 
@@ -1224,13 +1235,17 @@ class DirectionEstimatorPandas:
             camera_coord = SkyCoord(this_telescope['x'].values * u.m,
                                     this_telescope['y'].values * u.m,
                                     frame=camera_frame)
+
+            # Shower image coordinates on the sky
             shower_coord_in_telescope = camera_coord.transform_to(telescope_frame)
 
             disp_reco = this_telescope['disp_reco'].values * u.rad
             position_angle_reco = this_telescope['pos_angle_reco'].values * u.rad
 
+            # Shower direction coordinates on the sky
             event_coord_reco = shower_coord_in_telescope.directional_offset_by(position_angle_reco, disp_reco)
 
+            # Saving to a data frame
             alt = event_coord_reco.altaz.alt.to(u.rad).value
             az = event_coord_reco.altaz.az.to(u.rad).value
             df = pd.DataFrame(data={'alt_reco': alt, 'az_reco': az}, index=this_telescope.index)
@@ -1239,6 +1254,7 @@ class DirectionEstimatorPandas:
 
         direction_reco = direction_reco.join(predictions)
         direction_reco.sort_index(inplace=True)
+        # -----------------------------
 
         return direction_reco
 
@@ -1258,10 +1274,10 @@ class DirectionEstimatorPandas:
         """
 
         output = dict()
+        output['rf_settings'] = self.rf_settings
         output['feature_names'] = self.feature_names
-        output['target_name'] = self.target_name
         output['telescope_regressors'] = self.telescope_regressors
-        output['consolidating_regressor'] = self.consolidating_regressor
+        output['telescope_descriptions'] = self.telescope_descriptions
 
         joblib.dump(output, file_name)
 
@@ -1282,10 +1298,10 @@ class DirectionEstimatorPandas:
 
         data = joblib.load(file_name)
 
+        self.rf_settings = data['rf_settings']
         self.feature_names = data['feature_names']
-        self.target_name = data['target_name']
         self.telescope_regressors = data['telescope_regressors']
-        self.consolidating_regressor = data['consolidating_regressor']
+        self.telescope_descriptions = data['telescope_descriptions']
 
 
 class DirectionStereoEstimatorPandas:
