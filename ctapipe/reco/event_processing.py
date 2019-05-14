@@ -1070,46 +1070,6 @@ class DirectionEstimatorPandas:
 
         return direction_reco
 
-    # TODO: remove this method - not used
-    def _get_per_telescope_features(self, shower_data):
-        """
-        Extracts the shower features specific to each telescope of
-        the available ones.
-
-        Parameters
-        ----------
-        shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
-
-        Returns
-        -------
-        output: dict
-            output['feature']: dict
-                Shower features for each telescope (keys - telescope IDs).
-            output['targets']: dict
-                Regressor targets for each telescope (keys - telescope IDs).
-
-        """
-
-        tel_ids = shower_data.index.levels[2]
-
-        output = dict()
-        output['features'] = dict()
-        output['targets'] = dict()
-        output['event_ids'] = dict()
-
-        for tel_id in tel_ids:
-            selected_columns = self.feature_names + (self.target_name,)
-
-            this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), selected_columns]
-            this_telescope = this_telescope.dropna()
-
-            output['features'][tel_id] = this_telescope[list(self.feature_names)].values
-            output['targets'][tel_id] = this_telescope[self.target_name].values
-
-        return output
-
     def _train_per_telescope_rf(self, shower_data, target_name, **rf_settings):
         """
         Trains the energy regressors for each of the available telescopes.
