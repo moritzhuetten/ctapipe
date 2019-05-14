@@ -628,7 +628,7 @@ class EnergyEstimatorPandas:
     regressor is applied to combine the per-telescope predictions.
     """
 
-    def __init__(self, feature_names, target_name):
+    def __init__(self, feature_names, target_name, **rf_settings):
         """
         Constructor. Gets basic settings.
 
@@ -639,10 +639,13 @@ class EnergyEstimatorPandas:
             columns of the data frames that will be processed.
         target_name: str
             The target variable for the regressor. Likely this should be 'log10_true_energy'.
+        rf_settings: dict
+            The settings to be passed to the random forest regressor.
         """
 
         self.feature_names = feature_names
         self.target_name = target_name
+        self.rf_settings = rf_settings
 
         self.telescope_regressors = dict()
         self.consolidating_regressor = None
@@ -788,7 +791,7 @@ class EnergyEstimatorPandas:
             x_train = input_data['features'][tel_id]
             y_train = input_data['targets'][tel_id]
 
-            regressor = sklearn.ensemble.RandomForestRegressor(n_estimators=10)
+            regressor = sklearn.ensemble.RandomForestRegressor(self.rf_settings)
             regressor.fit(x_train, y_train)
 
             self.telescope_regressors[tel_id] = regressor
