@@ -1445,7 +1445,6 @@ class DirectionStereoEstimatorPandas:
             y_train = targets[tel_id]
 
             regressor = sklearn.ensemble.RandomForestRegressor(**self.rf_settings)
-            # regressor = sklearn.ensemble.GradientBoostingRegressor(**self.rf_settings)
             regressor.fit(x_train, y_train)
 
             telescope_regressors[tel_id] = regressor
