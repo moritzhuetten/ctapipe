@@ -922,7 +922,7 @@ class DirectionEstimatorPandas:
 
         self.rf_settings = rf_settings
 
-        self.telescope_regressors = dict(disp={}, pos_angle={})
+        self.telescope_rfs = dict(disp={}, pos_angle_shift={})
 
     def _get_disp_and_position_angle(self, shower_data):
         """
@@ -1017,10 +1017,10 @@ class DirectionEstimatorPandas:
         shower_data = shower_data.join(disp_pos_angle)
 
         print('Training "disp" RFs...')
-        self.telescope_regressors['disp'] = self._train_per_telescope_rf(shower_data, 'disp')
+        self.telescope_rfs['disp'] = self._train_per_telescope_rf(shower_data, 'disp')
 
         print('Training "PA" RFs...')
-        self.telescope_regressors['pos_angle_shift'] = self._train_per_telescope_rf(shower_data, 'pos_angle_shift')
+        self.telescope_rfs['pos_angle_shift'] = self._train_per_telescope_rf(shower_data, 'pos_angle_shift')
 
     def predict(self, shower_data):
         """
@@ -1160,7 +1160,7 @@ class DirectionEstimatorPandas:
                 features = this_telescope.values
 
                 # Getting the RF response
-                response = self.telescope_regressors[kind][tel_id].predict(features)
+                response = self.telescope_rfs[kind][tel_id].predict(features)
 
                 # Storing to a data frame
                 name = f'{kind:s}_reco'
@@ -1252,7 +1252,7 @@ class DirectionEstimatorPandas:
         output = dict()
         output['rf_settings'] = self.rf_settings
         output['feature_names'] = self.feature_names
-        output['telescope_regressors'] = self.telescope_regressors
+        output['telescope_regressors'] = self.telescope_rfs
         output['telescope_descriptions'] = self.telescope_descriptions
 
         joblib.dump(output, file_name)
@@ -1276,7 +1276,7 @@ class DirectionEstimatorPandas:
 
         self.rf_settings = data['rf_settings']
         self.feature_names = data['feature_names']
-        self.telescope_regressors = data['telescope_regressors']
+        self.telescope_rfs = data['telescope_regressors']
         self.telescope_descriptions = data['telescope_descriptions']
 
 
