@@ -980,7 +980,7 @@ class DirectionEstimatorPandas:
                                       event_coord_in_telescope.altaz.alt)
 
             pos_angle = shower_coord_in_telescope.position_angle(event_coord)
-            psi = this_telescope['psi'].values * u.rad
+            psi = this_telescope['psi'].values * u.deg
 
             toshift_by_pi = abs(pos_angle.value - 3.14159 - psi.to(u.rad).value) < 1
             toshift_by_pi = np.int16(toshift_by_pi)
@@ -1213,7 +1213,7 @@ class DirectionEstimatorPandas:
             shower_coord_in_telescope = camera_coord.transform_to(telescope_frame)
 
             disp_reco = this_telescope['disp_reco'].values * u.rad
-            position_angle_reco = this_telescope['psi'].values * u.rad
+            position_angle_reco = this_telescope['psi'].values * u.deg
             # In some cases the position angle should be flipped by pi
             shift = u.rad * np.pi * np.round(this_telescope['pos_angle_shift_reco'].values)
             position_angle_reco += shift
