@@ -952,7 +952,7 @@ class DirectionEstimatorPandas:
             optics = self.telescope_descriptions[tel_id].optics
             camera = self.telescope_descriptions[tel_id].camera
 
-            values = {'disp_true': {}, 'pos_angle_true': {}}
+            values = {'disp_true': {}, 'pos_angle_shift_true': {}}
 
             this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), shower_data.columns]
 
@@ -980,9 +980,13 @@ class DirectionEstimatorPandas:
                                       event_coord_in_telescope.altaz.alt)
 
             pos_angle = shower_coord_in_telescope.position_angle(event_coord)
+            psi = this_telescope['psi'].values * u.rad
+
+            toshift_by_pi = abs(pos_angle.value - 3.14159 - psi.to(u.rad).value) < 1
+            toshift_by_pi = np.int16(toshift_by_pi)
 
             values['disp_true'] = disp.to(u.rad).value
-            values['pos_angle_true'] = pos_angle.value
+            values['pos_angle_shift_true'] = toshift_by_pi
 
             df = pd.DataFrame.from_dict(values)
             df.index = this_telescope.index
@@ -1013,12 +1017,10 @@ class DirectionEstimatorPandas:
         shower_data = shower_data.join(disp_pos_angle)
 
         print('Training "disp" RFs...')
-        self.telescope_regressors['disp'] = self._train_per_telescope_rf(shower_data, 'disp_true',
-                                                                         **self.rf_settings)
+        self.telescope_regressors['disp'] = self._train_per_telescope_rf(shower_data, 'disp')
 
         print('Training "PA" RFs...')
-        self.telescope_regressors['pos_angle'] = self._train_per_telescope_rf(shower_data, 'pos_angle_true',
-                                                                              **self.rf_settings)
+        self.telescope_regressors['pos_angle_shift'] = self._train_per_telescope_rf(shower_data, 'pos_angle_shift')
 
     def predict(self, shower_data):
         """
@@ -1073,7 +1075,7 @@ class DirectionEstimatorPandas:
 
         return direction_reco
 
-    def _train_per_telescope_rf(self, shower_data, target_name, **rf_settings):
+    def _train_per_telescope_rf(self, shower_data, kind):
         """
         Trains the energy regressors for each of the available telescopes.
 
@@ -1082,11 +1084,13 @@ class DirectionEstimatorPandas:
         shower_data: pandas.DataFrame
             Data frame with the shower parameters. Must contain columns called
             self.feature_names and self.target_name.
+        kind: str
+            RF kind. Can be "disp" (regressor is used) or 'pos_angle_shift' (classifier is used).
 
         Returns
         -------
         dict:
-            Regressors for each of the telescopes. Keys - telescope IDs.
+            Regressors/classifiers for each of the telescopes. Keys - telescope IDs.
 
         """
 
@@ -1094,9 +1098,9 @@ class DirectionEstimatorPandas:
 
         tel_ids = shower_data.index.levels[2]
 
-        kind = target_name.replace('_true', '')
+        target_name = kind + '_true'
 
-        telescope_regressors = dict()
+        telescope_rfs = dict()
 
         for tel_id in tel_ids:
             print(f'Training telescope {tel_id}...')
@@ -1107,12 +1111,18 @@ class DirectionEstimatorPandas:
             x_train = input_data[self.feature_names[kind]].values
             y_train = input_data[target_name].values
 
-            regressor = sklearn.ensemble.RandomForestRegressor(**rf_settings)
-            regressor.fit(x_train, y_train)
+            if kind == 'pos_angle_shift':
+                # This is a binary classification problem - to shift or not to shift
+                rf = sklearn.ensemble.RandomForestClassifier(**self.rf_settings)
+            else:
+                # Regression is needed for "disp"
+                rf = sklearn.ensemble.RandomForestRegressor(**self.rf_settings)
 
-            telescope_regressors[tel_id] = regressor
+            rf.fit(x_train, y_train)
 
-        return telescope_regressors
+            telescope_rfs[tel_id] = rf
+
+        return telescope_rfs
 
     def _apply_per_telescope_rf(self, shower_data):
         """
@@ -1140,7 +1150,7 @@ class DirectionEstimatorPandas:
 
         prediction_list = []
 
-        for kind in ['disp', 'pos_angle']:
+        for kind in ['disp', 'pos_angle_shift']:
             pred_ = pd.DataFrame()
 
             for tel_id in tel_ids:
@@ -1203,7 +1213,10 @@ class DirectionEstimatorPandas:
             shower_coord_in_telescope = camera_coord.transform_to(telescope_frame)
 
             disp_reco = this_telescope['disp_reco'].values * u.rad
-            position_angle_reco = this_telescope['pos_angle_reco'].values * u.rad
+            position_angle_reco = this_telescope['psi'].values * u.rad
+            # In some cases the position angle should be flipped by pi
+            shift = u.rad * np.pi * np.round(this_telescope['pos_angle_shift_reco'].values)
+            position_angle_reco += shift
 
             # Shower direction coordinates on the sky
             event_coord_reco = shower_coord_in_telescope.directional_offset_by(position_angle_reco, disp_reco)
