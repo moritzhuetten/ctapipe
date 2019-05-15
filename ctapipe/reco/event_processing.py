@@ -634,7 +634,7 @@ class EnergyEstimatorPandas:
 
         Parameters
         ----------
-        feature_names: tuple
+        feature_names: list
             Feature names (str type) to be used by the regressor. Must correspond to the
             columns of the data frames that will be processed.
         rf_settings: dict
@@ -728,7 +728,7 @@ class EnergyEstimatorPandas:
         self.telescope_regressors = dict()
 
         for tel_id in tel_ids:
-            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names + ('true_energy',)]
+            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names + ['true_energy']]
             input_data.dropna(inplace=True)
 
             x_train = input_data[list(self.feature_names)].values
@@ -817,9 +817,9 @@ class EnergyEstimatorPandas:
 
         data = joblib.load(file_name)
 
-        self.feature_names = data['feature_names'] 
+        self.feature_names = data['feature_names']
         self.telescope_regressors = data['telescope_regressors']
-        self.consolidating_regressor = data['consolidating_regressor'] 
+        self.consolidating_regressor = data['consolidating_regressor']
 
 
 class DirectionEstimatorPandas:
