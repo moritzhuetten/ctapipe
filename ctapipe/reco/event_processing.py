@@ -628,7 +628,7 @@ class EnergyEstimatorPandas:
     regressor is applied to combine the per-telescope predictions.
     """
 
-    def __init__(self, feature_names, target_name, **rf_settings):
+    def __init__(self, feature_names, **rf_settings):
         """
         Constructor. Gets basic settings.
 
@@ -637,14 +637,11 @@ class EnergyEstimatorPandas:
         feature_names: tuple
             Feature names (str type) to be used by the regressor. Must correspond to the
             columns of the data frames that will be processed.
-        target_name: str
-            The target variable for the regressor. Likely this should be 'log10_true_energy'.
         rf_settings: dict
             The settings to be passed to the random forest regressor.
         """
 
         self.feature_names = feature_names
-        self.target_name = target_name
         self.rf_settings = rf_settings
 
         self.telescope_regressors = dict()
@@ -657,8 +654,7 @@ class EnergyEstimatorPandas:
         Parameters
         ----------
         shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
+            Data frame with the shower parameters. Must contain columns called self.feature_names.
 
         Returns
         -------
@@ -668,33 +664,25 @@ class EnergyEstimatorPandas:
 
         self.train_per_telescope_rf(shower_data)
 
-        shower_data_with_energy = self.apply_per_telescope_rf(shower_data, output_prefix='log10_est_energy')
+        # shower_data_with_energy = self.apply_per_telescope_rf(shower_data)
+        #
+        # features = shower_data_with_energy['energy_reco']
+        # features = features.fillna(0).groupby(['obs_id', 'event_id']).sum()
+        # features = features.values
+        #
+        # target = shower_data_with_energy['true_energy'].groupby(['obs_id', 'event_id']).mean().values
+        #
+        # self.consolidating_regressor = sklearn.ensemble.RandomForestRegressor(self.rf_settings)
+        # self.consolidating_regressor.fit(features, target)
 
-        energy_feature_cols = list(filter(lambda s: 'log10_est_energy_' in s, shower_data_with_energy.columns))
-        energy_target_col = 'log10_true_energy'
-
-        features = shower_data_with_energy[energy_feature_cols]
-        features = features.fillna(0).groupby(['obs_id', 'event_id']).sum()
-        features = features.values
-
-        target = shower_data_with_energy[energy_target_col].groupby(['obs_id', 'event_id']).mean().values
-
-        self.consolidating_regressor = sklearn.ensemble.RandomForestRegressor(n_estimators=10)
-        self.consolidating_regressor.fit(features, target)
-
-    def predict(self, shower_data, output_prefix):
+    def predict(self, shower_data):
         """
         Applies the trained regressor to the data.
 
         Parameters
         ----------
         shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
-        output_prefix: str, optional
-            Prefix to the new data frame columns, that will host the regressors
-            predictions. Columns will have names "{base_output_name}_{tel_id}".
-            Defaults to 'est_energy'.
+            Data frame with the shower parameters. Must contain columns called self.feature_names.
 
         Returns
         -------
@@ -703,67 +691,20 @@ class EnergyEstimatorPandas:
 
         """
 
-        shower_data_with_energy = self.apply_per_telescope_rf(shower_data, output_prefix='log10_est_energy')
+        shower_data_with_energy = self.apply_per_telescope_rf(shower_data)
 
-        energy_feature_cols = list(filter(lambda s: output_prefix + '_' in s, shower_data_with_energy.columns))
+        # Selecting and log-scaling the reconstructed energies
+        energy_reco = shower_data_with_energy['energy_reco'].apply(np.log10)
 
-        features = shower_data_with_energy[energy_feature_cols]
-        features = features.fillna(0).groupby(['obs_id', 'event_id']).sum()
-        index = features.index
-        features = features.values
+        # Grouping per-event data
+        energy_group = energy_reco.groupby(level=['obs_id', 'event_id'])
 
-        predictions = self.consolidating_regressor.predict(features)
+        # Averaging
+        energy_mean = energy_group.mean()
 
-        est_energy_series = pd.Series(np.repeat(np.nan, len(features)),
-                                      name='log10_est_energy', dtype=np.float32,
-                                      index=index)
-
-        est_energy_series.loc[:] = predictions
-
-        est_energy_series = est_energy_series.reindex(shower_data_with_energy.index)
-
-        shower_data_with_energy = shower_data_with_energy.join(est_energy_series)
+        shower_data_with_energy['energy_reco_mean'] = 10**energy_mean
 
         return shower_data_with_energy
-
-    def _get_per_telescope_features(self, shower_data):
-        """
-        Extracts the shower features specific to each telescope of
-        the available ones.
-
-        Parameters
-        ----------
-        shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
-
-        Returns
-        -------
-        output: dict
-            output['feature']: dict
-                Shower features for each telescope (keys - telescope IDs).
-            output['targets']: dict
-                Regressor targets for each telescope (keys - telescope IDs).
-
-        """
-
-        tel_ids = shower_data.index.levels[2]
-
-        output = dict()
-        output['features'] = dict()
-        output['targets'] = dict()
-        output['event_ids'] = dict()
-
-        for tel_id in tel_ids:
-            selected_columns = self.feature_names + (self.target_name,)
-
-            this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), selected_columns]
-            this_telescope = this_telescope.dropna()
-
-            output['features'][tel_id] = this_telescope[list(self.feature_names)].values
-            output['targets'][tel_id] = this_telescope[self.target_name].values
-
-        return output
 
     def train_per_telescope_rf(self, shower_data):
         """
@@ -772,8 +713,7 @@ class EnergyEstimatorPandas:
         Parameters
         ----------
         shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
+            Data frame with the shower parameters. Must contain columns called self.feature_names.
 
         Returns
         -------
@@ -781,34 +721,32 @@ class EnergyEstimatorPandas:
 
         """
 
-        input_data = self._get_per_telescope_features(shower_data)
+        idx = pd.IndexSlice
 
-        tel_ids = input_data['features'].keys()
+        tel_ids = shower_data.index.levels[2]
 
         self.telescope_regressors = dict()
 
         for tel_id in tel_ids:
-            x_train = input_data['features'][tel_id]
-            y_train = input_data['targets'][tel_id]
+            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names + ('true_energy',)]
+            input_data.dropna(inplace=True)
 
-            regressor = sklearn.ensemble.RandomForestRegressor(self.rf_settings)
+            x_train = input_data[list(self.feature_names)].values
+            y_train = np.log10(input_data['true_energy'].values)
+
+            regressor = sklearn.ensemble.RandomForestRegressor(**self.rf_settings)
             regressor.fit(x_train, y_train)
 
             self.telescope_regressors[tel_id] = regressor
 
-    def apply_per_telescope_rf(self, shower_data, output_prefix='est_energy'):
+    def apply_per_telescope_rf(self, shower_data):
         """
         Applies the regressors, trained per each telescope.
 
         Parameters
         ----------
         shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
-        output_prefix: str, optional
-            Prefix to the new data frame columns, that will host the regressors
-            predictions. Columns will have names "{base_output_name}_{tel_id}".
-            Defaults to 'est_energy'.
+            Data frame with the shower parameters. Must contain columns called self.feature_names.
 
         Returns
         -------
@@ -817,33 +755,28 @@ class EnergyEstimatorPandas:
 
         """
 
-        input_data = self._get_per_telescope_features(shower_data)
+        tel_ids = shower_data.index.levels[2]
 
-        tel_ids = input_data['features'].keys()
-
-        shower_data_with_energy = shower_data.copy()
+        energy_reco = pd.DataFrame()
 
         for tel_id in tel_ids:
-            selected_columns = self.feature_names + (self.target_name,)
-
-            this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), selected_columns]
+            # Selecting data
+            this_telescope = shower_data.loc[(slice(None), slice(None), tel_id), self.feature_names]
             this_telescope = this_telescope.dropna()
-            index = this_telescope.index.remove_unused_levels()
+            features = this_telescope.values
 
-            data_series_name = "{:s}_{:d}".format(output_prefix, tel_id)
-            est_energy_series = pd.Series(np.repeat(np.nan, len(this_telescope)),
-                                          name=data_series_name, dtype=np.float32,
-                                          index=index)
+            # Getting the RF response
+            response = 10**self.telescope_regressors[tel_id].predict(features)
 
-            predictions = self.telescope_regressors[tel_id].predict(input_data['features'][tel_id])
+            # Storing to a data frame
+            name = 'energy_reco'
+            df = pd.DataFrame(data={name: response}, index=this_telescope.index)
 
-            est_energy_series.loc[(slice(None), slice(None), tel_id)] = predictions
+            energy_reco = energy_reco.append(df)
 
-            est_energy_series = est_energy_series.reindex(shower_data.index)
+        energy_reco.sort_index(inplace=True)
 
-            shower_data_with_energy = shower_data_with_energy.assign(**{data_series_name: est_energy_series.values})
-
-        return shower_data_with_energy
+        return energy_reco
 
     def save(self, file_name):
         """
@@ -862,7 +795,6 @@ class EnergyEstimatorPandas:
 
         output = dict()
         output['feature_names'] = self.feature_names
-        output['target_name'] = self.target_name
         output['telescope_regressors'] = self.telescope_regressors
         output['consolidating_regressor'] = self.consolidating_regressor
 
@@ -886,8 +818,7 @@ class EnergyEstimatorPandas:
         data = joblib.load(file_name)
 
         self.feature_names = data['feature_names'] 
-        self.target_name = data['target_name'] 
-        self.telescope_regressors = data['telescope_regressors'] 
+        self.telescope_regressors = data['telescope_regressors']
         self.consolidating_regressor = data['consolidating_regressor'] 
 
 
@@ -1642,4 +1573,3 @@ class DirectionStereoEstimatorPandas:
         self.feature_names = data['feature_names']
         self.telescope_regressors = data['telescope_regressors']
         self.telescope_descriptions = data['telescope_descriptions']
-
