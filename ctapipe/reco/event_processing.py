@@ -1160,7 +1160,11 @@ class DirectionEstimatorPandas:
                 features = this_telescope.values
 
                 # Getting the RF response
-                response = self.telescope_rfs[kind][tel_id].predict(features)
+                if kind == 'pos_angle_shift':
+                    response = self.telescope_rfs[kind][tel_id].predict_proba(features)
+                    response = response[:, 1]
+                else:
+                    response = self.telescope_rfs[kind][tel_id].predict(features)
 
                 # Storing to a data frame
                 name = f'{kind:s}_reco'
