@@ -991,15 +991,23 @@ class DirectionEstimatorPandas:
         _y = np.sin(direction_reco['az_reco']) * np.cos(direction_reco['alt_reco'])
         _z = np.sin(direction_reco['alt_reco'])
 
+        # Getting the weights
+        weights = direction_reco['disp_reco_err']
+
+        # Weighted XYZ
+        _x = _x * weights
+        _y = _y * weights
+        _z = _z * weights
+
         # Grouping per-event data
         x_group = _x.groupby(level=['obs_id', 'event_id'])
         y_group = _y.groupby(level=['obs_id', 'event_id'])
         z_group = _z.groupby(level=['obs_id', 'event_id'])
 
-        # Averaging
-        x_mean = x_group.mean()
-        y_mean = y_group.mean()
-        z_mean = z_group.mean()
+        # Averaging: weighted mean
+        x_mean = x_group.sum() / weights.sum()
+        y_mean = y_group.sum() / weights.sum()
+        z_mean = z_group.sum() / weights.sum()
 
         # Computing the averaged spherical coordinates
         coord_mean = SkyCoord(representation_type='cartesian',
@@ -1106,12 +1114,23 @@ class DirectionEstimatorPandas:
                 if kind == 'pos_angle_shift':
                     response = self.telescope_rfs[kind][tel_id].predict_proba(features)
                     response = response[:, 1]
+
+                    # Storing to a data frame
+                    name = f'{kind:s}_reco'
+                    df = pd.DataFrame(data={name: response}, index=this_telescope.index)
                 else:
                     response = self.telescope_rfs[kind][tel_id].predict(features)
 
-                # Storing to a data frame
-                name = f'{kind:s}_reco'
-                df = pd.DataFrame(data={name: response}, index=this_telescope.index)
+                    per_tree_responses = []
+                    for tree in self.telescope_rfs[kind][tel_id].estimators_:
+                        per_tree_responses.append(tree.predict(features))
+                    response_err = np.std(per_tree_responses, axis=0)
+
+                    # Storing to a data frame
+                    val_name = f'{kind:s}_reco'
+                    err_name = f'{kind:s}_reco_err'
+                    data_ = {val_name: response, err_name: response_err}
+                    df = pd.DataFrame(data=data_, index=this_telescope.index)
 
                 if pred_.empty:
                     pred_ = predictions.append(df)
