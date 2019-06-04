@@ -696,13 +696,20 @@ class EnergyEstimatorPandas:
         # Selecting and log-scaling the reconstructed energies
         energy_reco = shower_data_with_energy['energy_reco'].apply(np.log10)
 
+        # Getting the weights
+        weights = shower_data_with_energy['energy_reco_err']
+
+        # Weighted energies
+        weighted = energy_reco * weights
+
         # Grouping per-event data
-        energy_group = energy_reco.groupby(level=['obs_id', 'event_id'])
+        weighted_group = weighted.groupby(level=['obs_id', 'event_id'])
+        weight_group = weights.groupby(level=['obs_id', 'event_id'])
 
-        # Averaging
-        energy_mean = energy_group.mean()
+        # Weighted mean log-energy
+        log_energy = weighted_group.sum() / weight_group.sum()
 
-        shower_data_with_energy['energy_reco_mean'] = 10**energy_mean
+        shower_data_with_energy['energy_reco_mean'] = 10 ** log_energy
 
         return shower_data_with_energy
 
@@ -768,9 +775,14 @@ class EnergyEstimatorPandas:
             # Getting the RF response
             response = 10**self.telescope_regressors[tel_id].predict(features)
 
+            per_tree_responses = []
+            for tree in self.telescope_regressors[tel_id].estimators_:
+                per_tree_responses.append(10**tree.predict(features))
+            response_err = np.std(per_tree_responses, axis=0)
+
             # Storing to a data frame
-            name = 'energy_reco'
-            df = pd.DataFrame(data={name: response}, index=this_telescope.index)
+            result = {'energy_reco': response, 'energy_reco_err': response_err}
+            df = pd.DataFrame(data=result, index=this_telescope.index)
 
             energy_reco = energy_reco.append(df)
 
