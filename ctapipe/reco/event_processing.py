@@ -1247,11 +1247,12 @@ class DirectionEstimatorPandas:
         for tel_id in tel_ids:
             print(f'Training telescope {tel_id}...')
 
-            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names[kind] + [target_name]]
+            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names[kind] + ['event_weight', target_name]]
             input_data.dropna(inplace=True)
 
             x_train = input_data[self.feature_names[kind]].values
             y_train = input_data[target_name].values
+            weight = input_data['event_weight'].values
 
             if kind == 'pos_angle_shift':
                 # This is a binary classification problem - to shift or not to shift
@@ -1260,7 +1261,7 @@ class DirectionEstimatorPandas:
                 # Regression is needed for "disp"
                 rf = sklearn.ensemble.RandomForestRegressor(**self.rf_settings)
 
-            rf.fit(x_train, y_train)
+            rf.fit(x_train, y_train, sample_weight=weight)
 
             telescope_rfs[tel_id] = rf
 
