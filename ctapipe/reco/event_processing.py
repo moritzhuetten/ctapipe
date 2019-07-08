@@ -735,14 +735,15 @@ class EnergyEstimatorPandas:
         self.telescope_regressors = dict()
 
         for tel_id in tel_ids:
-            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names + ['true_energy']]
+            input_data = shower_data.loc[idx[:, :, tel_id], self.feature_names + ['event_weight', 'true_energy']]
             input_data.dropna(inplace=True)
 
             x_train = input_data[list(self.feature_names)].values
             y_train = np.log10(input_data['true_energy'].values)
+            weight = input_data['event_weight'].values
 
             regressor = sklearn.ensemble.RandomForestRegressor(**self.rf_settings)
-            regressor.fit(x_train, y_train)
+            regressor.fit(x_train, y_train, sample_weight=weight)
 
             self.telescope_regressors[tel_id] = regressor
 
