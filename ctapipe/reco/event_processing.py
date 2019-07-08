@@ -1023,67 +1023,6 @@ class DirectionEstimatorPandas:
         print('Training "PA" RFs...')
         self.telescope_rfs['pos_angle_shift'] = self._train_per_telescope_rf(shower_data, 'pos_angle_shift')
 
-    def predict_(self, shower_data):
-        """
-        Applies the trained regressor to the data.
-
-        Parameters
-        ----------
-        shower_data: pandas.DataFrame
-            Data frame with the shower parameters. Must contain columns called
-            self.feature_names and self.target_name.
-
-        Returns
-        -------
-        pandas.DataFrame:
-            Updated data frame with the computed shower energies.
-
-        """
-
-        # Computing the estimates from individual telescopes
-        direction_reco = self._apply_per_telescope_rf(shower_data)
-
-        # Stereo estimate - arithmetical mean
-        # First getting cartensian XYZ
-        _x = np.cos(direction_reco['az_reco']) * np.cos(direction_reco['alt_reco'])
-        _y = np.sin(direction_reco['az_reco']) * np.cos(direction_reco['alt_reco'])
-        _z = np.sin(direction_reco['alt_reco'])
-
-        # Getting the weights
-        weights = direction_reco['disp_reco_err']
-
-        # Weighted XYZ
-        _x = _x * weights
-        _y = _y * weights
-        _z = _z * weights
-
-        # Grouping per-event data
-        x_group = _x.groupby(level=['obs_id', 'event_id'])
-        y_group = _y.groupby(level=['obs_id', 'event_id'])
-        z_group = _z.groupby(level=['obs_id', 'event_id'])
-
-        # Averaging: weighted mean
-        x_mean = x_group.sum() / weights.sum()
-        y_mean = y_group.sum() / weights.sum()
-        z_mean = z_group.sum() / weights.sum()
-
-        # Computing the averaged spherical coordinates
-        coord_mean = SkyCoord(representation_type='cartesian',
-                              x=x_mean.values,
-                              y=y_mean.values,
-                              z=z_mean.values)
-
-        # Converting to a data frame
-        coord_mean_df = pd.DataFrame(data={'az_reco_mean': coord_mean.spherical.lon.to(u.rad),
-                                           'alt_reco_mean': coord_mean.spherical.lat.to(u.rad)},
-                                     index=x_mean.index)
-
-        # Storing
-        direction_reco['az_reco_mean'] = coord_mean_df['az_reco_mean']
-        direction_reco['alt_reco_mean'] = coord_mean_df['alt_reco_mean']
-
-        return direction_reco
-
     @staticmethod
     def _set_flip(bit_mask, tel_id):
         flip_code = 2 ** tel_id
@@ -1190,11 +1129,8 @@ class DirectionEstimatorPandas:
                 if flip:
                     flip_code = self._set_flip(flip_code, tel_id)
 
-            # print(f'flip: {flip_comb}, code: {flip_code}')
-
             for tel_comb in telescope_combinations:
                 tel_id1, tel_id2 = tel_comb
-                # print(f'tel: {tel_comb}')
 
                 tel_df1 = df_with_flips.xs(tel_id1, level='tel_id')
                 tel_df2 = df_with_flips.xs(tel_id2, level='tel_id')
@@ -1305,6 +1241,7 @@ class DirectionEstimatorPandas:
         """
 
         # Computing the estimates from individual telescopes
+        # This is the "mono" estimate
         direction_reco = self._apply_per_telescope_rf(shower_data)
 
         shower_data_new = shower_data.join(direction_reco)
@@ -1313,18 +1250,26 @@ class DirectionEstimatorPandas:
 
         tel_ids = shower_data_new.index.levels[2]
 
+        # Selecting "stereo" (multi-telescope) events only
         multi_events = shower_data_new.query('multiplicity > 1')
 
+        # Computing direction of all possible head-tail flips
         direction_with_flips = self._get_directions_with_flips(multi_events)
+        # Computing the total distance between the per-telescope positions in all flip combinations
         pairwise_dist = self._get_total_pairwise_dist_with_flips(direction_with_flips)
+        # Selecting the flip combination with the smallest distance
         flip_choice = self._get_flip_choice_from_pairwise_dist2(pairwise_dist, tel_ids)
 
+        # Filtering the reconstructed directions for the "min distance" flip combination
         common_idx = flip_choice.index.intersection(direction_with_flips.index)
         direction_with_selected_flips = direction_with_flips.loc[common_idx]
 
+        # Assigning weights to average out per-telescope estimates
         direction_with_selected_flips['weight'] = multi_events['disp_reco_err']
+        # Getting the final direction prediction
         multi_events_reco = self._get_average_direction(direction_with_selected_flips)
 
+        # Merging the "multi-telescope" and "mono" estimates
         direction_reco = direction_reco.join(multi_events_reco.reindex(direction_reco.index))
 
         return direction_reco
