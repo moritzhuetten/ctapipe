@@ -1190,7 +1190,6 @@ class DirectionEstimatorPandas:
 
         shower_data_new = shower_data.join(direction_reco)
         shower_data_new['multiplicity'] = shower_data_new['intensity'].groupby(level=['obs_id', 'event_id']).count()
-        direction_reco['multiplicity'] = direction_reco['intensity'].groupby(level=['obs_id', 'event_id']).count()
 
         tel_ids = shower_data_new.index.levels[2]
 
