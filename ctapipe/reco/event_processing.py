@@ -1,4 +1,5 @@
 import re
+import itertools
 import numpy as np
 import astropy.units as u
 from copy import deepcopy
@@ -885,10 +886,10 @@ class EnergyEstimatorPandas:
 
         data = joblib.load(file_name)
 
-        self.feature_names = data['feature_names'] 
-        self.target_name = data['target_name'] 
-        self.telescope_regressors = data['telescope_regressors'] 
-        self.consolidating_regressor = data['consolidating_regressor'] 
+        self.feature_names = data['feature_names']
+        self.target_name = data['target_name']
+        self.telescope_regressors = data['telescope_regressors']
+        self.consolidating_regressor = data['consolidating_regressor']
 
 
 class DirectionEstimatorPandas:
@@ -1022,7 +1023,7 @@ class DirectionEstimatorPandas:
         print('Training "PA" RFs...')
         self.telescope_rfs['pos_angle_shift'] = self._train_per_telescope_rf(shower_data, 'pos_angle_shift')
 
-    def predict(self, shower_data):
+    def predict_(self, shower_data):
         """
         Applies the trained regressor to the data.
 
@@ -1080,6 +1081,251 @@ class DirectionEstimatorPandas:
         # Storing
         direction_reco['az_reco_mean'] = coord_mean_df['az_reco_mean']
         direction_reco['alt_reco_mean'] = coord_mean_df['alt_reco_mean']
+
+        return direction_reco
+
+    @staticmethod
+    def _set_flip(bit_mask, tel_id):
+        flip_code = 2 ** tel_id
+
+        out_mask = np.bitwise_or(bit_mask, flip_code)
+
+        return out_mask
+
+    @staticmethod
+    def _get_flip(bit_mask, tel_id):
+        flip_code = 2 ** tel_id
+
+        out_mask = np.bitwise_and(bit_mask, flip_code)
+        out_mask = np.int8(out_mask == flip_code)
+
+        return out_mask
+
+    @staticmethod
+    def _get_flip_combinations(df):
+        tel_ids = df.index.levels[2]
+        flip_combinations = list(itertools.product([0, 1], repeat=len(tel_ids)))
+
+        return flip_combinations
+
+    @staticmethod
+    def _get_telescope_combinations(df):
+        tel_ids = df.index.levels[2]
+
+        telescope_combinations = set(itertools.product(tel_ids, repeat=2))
+        self_repetitions = set(zip(tel_ids, tel_ids))
+        telescope_combinations = telescope_combinations - self_repetitions
+
+        return telescope_combinations
+
+    def _get_directions_with_flips(self, reco_df):
+        tel_ids = reco_df.index.levels[2]
+
+        direction_with_flips = pd.DataFrame()
+
+        for tel_id in tel_ids:
+            optics = self.telescope_descriptions[tel_id].optics
+            camera = self.telescope_descriptions[tel_id].camera
+
+            # Selecting events from this telescope
+            this_telescope = reco_df.loc[(slice(None), slice(None), tel_id), reco_df.columns]
+
+            # Definining the coordinate systems
+            tel_pointing = AltAz(alt=this_telescope['tel_alt'].values * u.rad,
+                                 az=this_telescope['tel_az'].values * u.rad)
+
+            camera_frame = CameraFrame(focal_length=optics.equivalent_focal_length,
+                                       rotation=camera.cam_rotation)
+
+            telescope_frame = TelescopeFrame(telescope_pointing=tel_pointing)
+
+            camera_coord = SkyCoord(this_telescope['x'].values * u.m,
+                                    this_telescope['y'].values * u.m,
+                                    frame=camera_frame)
+
+            # Shower image coordinates on the sky
+            shower_coord_in_telescope = camera_coord.transform_to(telescope_frame)
+
+            disp_reco = this_telescope['disp_reco'].values * u.rad
+            position_angle_reco = this_telescope['psi'].values * u.deg
+
+            # Shower direction coordinates on the sky
+            for flip in [0, 1]:
+                event_coord_reco = shower_coord_in_telescope.directional_offset_by(
+                    position_angle_reco + flip * u.rad * np.pi, disp_reco)
+
+                # Saving to a data frame
+                alt = event_coord_reco.altaz.alt.to(u.rad).value
+                az = event_coord_reco.altaz.az.to(u.rad).value
+
+                df = pd.DataFrame(data={'alt_reco': alt,
+                                        'az_reco': az,
+                                        'disp_reco': this_telescope['disp_reco'].values,
+                                        'psi': this_telescope['psi'].values,
+                                        },
+                                  index=this_telescope.index)
+
+                # Adding the "flip" index
+                df = pd.concat([df], keys=[flip] * len(df), names=['flip'])
+                df = df.reset_index()
+                df = df.set_index(['obs_id', 'event_id', 'tel_id', 'flip'])
+
+                direction_with_flips = direction_with_flips.append(df)
+
+        return direction_with_flips
+
+    def _get_total_pairwise_dist_with_flips(self, df_with_flips):
+        telescope_combinations = self._get_telescope_combinations(df_with_flips)
+        flip_combinations = self._get_flip_combinations(df_with_flips)
+
+        tel_ids = df_with_flips.index.levels[2]
+        tel_ids = tel_ids.sort_values()
+
+        dist2 = pd.DataFrame()
+
+        for flip_comb in flip_combinations:
+
+            flip_code = 0
+            for flip, tel_id in zip(flip_comb, tel_ids):
+                if flip:
+                    flip_code = self._set_flip(flip_code, tel_id)
+
+            # print(f'flip: {flip_comb}, code: {flip_code}')
+
+            for tel_comb in telescope_combinations:
+                tel_id1, tel_id2 = tel_comb
+                # print(f'tel: {tel_comb}')
+
+                tel_df1 = df_with_flips.xs(tel_id1, level='tel_id')
+                tel_df2 = df_with_flips.xs(tel_id2, level='tel_id')
+                flip1 = self._get_flip(flip_code, tel_id1)
+                flip2 = self._get_flip(flip_code, tel_id2)
+
+                az1 = tel_df1.xs(flip1, level='flip')['az_reco']
+                az2 = tel_df2.xs(flip2, level='flip')['az_reco']
+                alt1 = tel_df1.xs(flip1, level='flip')['alt_reco']
+                alt2 = tel_df2.xs(flip2, level='flip')['alt_reco']
+
+                dist = angular_separation(az1, alt1, az2, alt2)
+                dist.fillna(0, inplace=True)
+
+                dist2_ = dist.apply(np.square)
+
+                dist2_ = pd.DataFrame(data={f'dist2': dist2_})
+                dist2_['tel_comb'] = [tel_comb] * len(dist2_)
+                dist2_['flip_code'] = [flip_code] * len(dist2_)
+                dist2_.reset_index(inplace=True)
+                dist2_.set_index(['obs_id', 'event_id', 'flip_code', 'tel_comb'], inplace=True)
+
+                dist2 = dist2.append(dist2_)
+
+        _group = dist2.groupby(level=['obs_id', 'event_id', 'flip_code'])
+        total_dist2 = _group.sum()
+
+        return total_dist2
+
+    def _get_flip_choice_from_pairwise_dist2(self, dist2_df, tel_ids):
+        _group = dist2_df.groupby(level=['obs_id', 'event_id'])
+        min_dist2 = _group.min()
+        min_dist2.head()
+
+        min_dist2_ = min_dist2.reindex(dist2_df.index)
+        result = dist2_df.join(min_dist2_, rsuffix='_')
+        result = result.query('(dist2 == dist2_)')
+
+        result.reset_index(inplace=True)
+
+        flip_choice = pd.DataFrame()
+        for tel_id in tel_ids:
+            df_ = result[['obs_id', 'event_id', 'flip_code']]
+            df_['tel_id'] = tel_id
+            df_['flip'] = self._get_flip(df_['flip_code'], tel_id)
+            df_.head()
+
+            flip_choice = flip_choice.append(df_)
+
+        flip_choice = flip_choice.drop('flip_code', axis=1, errors='raise')
+        flip_choice.set_index(['obs_id', 'event_id', 'tel_id', 'flip'], inplace=True)
+
+        return flip_choice
+
+    def _get_average_direction(self, df):
+        # Stereo estimate - arithmetical mean
+        # First getting cartensian XYZ
+        _x = np.cos(df['az_reco']) * np.cos(df['alt_reco'])
+        _y = np.sin(df['az_reco']) * np.cos(df['alt_reco'])
+        _z = np.sin(df['alt_reco'])
+
+        # Getting the weights
+        weights = df['weight']
+
+        # Weighted XYZ
+        _x = _x * weights
+        _y = _y * weights
+        _z = _z * weights
+
+        # Grouping per-event data
+        x_group = _x.groupby(level=['obs_id', 'event_id'])
+        y_group = _y.groupby(level=['obs_id', 'event_id'])
+        z_group = _z.groupby(level=['obs_id', 'event_id'])
+
+        # Averaging: weighted mean
+        x_mean = x_group.sum() / weights.sum()
+        y_mean = y_group.sum() / weights.sum()
+        z_mean = z_group.sum() / weights.sum()
+
+        # Computing the averaged spherical coordinates
+        coord_mean = SkyCoord(representation_type='cartesian',
+                              x=x_mean.values,
+                              y=y_mean.values,
+                              z=z_mean.values)
+
+        # Converting to a data frame
+        coord_mean_df = pd.DataFrame(data={'az_reco_mean': coord_mean.spherical.lon.to(u.rad),
+                                           'alt_reco_mean': coord_mean.spherical.lat.to(u.rad)},
+                                     index=x_mean.index)
+
+        return coord_mean_df
+
+    def predict(self, shower_data):
+        """
+        Applies the trained regressor to the data.
+
+        Parameters
+        ----------
+        shower_data: pandas.DataFrame
+            Data frame with the shower parameters. Must contain columns called
+            self.feature_names and self.target_name.
+
+        Returns
+        -------
+        pandas.DataFrame:
+            Updated data frame with the computed shower energies.
+
+        """
+
+        # Computing the estimates from individual telescopes
+        direction_reco = self._apply_per_telescope_rf(shower_data)
+
+        shower_data_new = shower_data.join(direction_reco)
+        shower_data_new['multiplicity'] = shower_data_new['intensity'].groupby(level=['obs_id', 'event_id']).count()
+        direction_reco['multiplicity'] = direction_reco['intensity'].groupby(level=['obs_id', 'event_id']).count()
+
+        tel_ids = shower_data_new.index.levels[2]
+
+        multi_events = shower_data_new.query('multiplicity > 1')
+
+        direction_with_flips = self._get_directions_with_flips(multi_events)
+        pairwise_dist = self._get_total_pairwise_dist_with_flips(direction_with_flips)
+        flip_choice = self._get_flip_choice_from_pairwise_dist2(pairwise_dist, tel_ids)
+
+        common_idx = flip_choice.index.intersection(direction_with_flips.index)
+        direction_with_selected_flips = direction_with_flips.loc[common_idx]
+
+        direction_with_selected_flips['weight'] = multi_events['disp_reco_err']
+        multi_events_reco = self._get_average_direction(direction_with_selected_flips)
+
+        direction_reco = direction_reco.join(multi_events_reco.reindex(direction_reco.index))
 
         return direction_reco
 
