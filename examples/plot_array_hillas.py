@@ -31,7 +31,7 @@ if __name__ == '__main__':
     point_azimuth = {}
     point_altitude = {}
 
-    calib = CameraCalibrator(eventsource=source)
+    calib = CameraCalibrator()
     off_angles = []
     first_event = True
     markers = None
@@ -52,7 +52,7 @@ if __name__ == '__main__':
             continue
 
         # calibrating the event
-        calib.calibrate(event)
+        calib(event)
         hillas_dict = {}
 
         # plot the core position, which must be transformed from the tilted
@@ -94,7 +94,7 @@ if __name__ == '__main__':
             camgeom = subarray.tel[tel_id].camera
 
             # note the [0] is for channel 0 which is high-gain channel
-            image = event.dl1.tel[tel_id].image[0]
+            image = event.dl1.tel[tel_id].image
 
             # Cleaning  of the image
             cleaned_image = image.copy()

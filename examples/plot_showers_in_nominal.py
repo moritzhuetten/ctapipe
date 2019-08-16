@@ -21,13 +21,11 @@ input_url = get_dataset_path('gamma_test_large.simtel.gz')
 
 
 with event_source(input_url=input_url) as source:
-    calibrator = CameraCalibrator(
-        eventsource=source,
-    )
+    calibrator = CameraCalibrator()
 
     for event in source:
 
-        calibrator.calibrate(event)
+        calibrator(event)
 
         nominal_frame = NominalFrame(
             origin=SkyCoord(alt=70 * u.deg, az=0 * u.deg, frame=AltAz)
@@ -40,7 +38,7 @@ with event_source(input_url=input_url) as source:
         for tel_id, dl1 in event.dl1.tel.items():
             camera = event.inst.subarray.tels[tel_id].camera
             focal_length = event.inst.subarray.tels[tel_id].optics.equivalent_focal_length
-            image = dl1.image[0]
+            image = dl1.image
 
             # telescope mc info
             mc_tel = event.mc.tel[tel_id]
