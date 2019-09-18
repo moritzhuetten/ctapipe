@@ -1,7 +1,7 @@
 import copy
 import pytest
 from ctapipe.io.magiceventsource import MAGICEventSourceROOT
-from ctapipe.io.eventsourcefactory import EventSourceFactory
+from ctapipe.io.eventsource import EventSource
 from ctapipe.io.eventseeker import EventSeeker
 from ctapipe.utils import get_dataset_path
 
