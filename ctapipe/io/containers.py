@@ -127,6 +127,10 @@ class DL1CameraContainer(Container):
         "the extractor."
         "Shape: (n_pixel, n_samples)",
     )
+    badpixels = Field(
+        None, 
+        "Numpy (nd-)array of bools indicating (a specific type of) bad pixels"
+    )
 
 class WeatherContainer(Container):
     """Storage of event-wise weather information (MAGIC implementation)."""
