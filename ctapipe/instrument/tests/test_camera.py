@@ -1,3 +1,4 @@
+""" Tests for CameraGeometry """
 import numpy as np
 from astropy import units as u
 from ctapipe.instrument import CameraGeometry
@@ -7,12 +8,14 @@ cam_ids = CameraGeometry.get_known_camera_names()
 
 
 def test_construct():
+    """ Check we can make a CameraGeometry from scratch """
     x = np.linspace(-10, 10, 100)
     y = np.linspace(-10, 10, 100)
     geom = CameraGeometry(cam_id=0, pix_id=np.arange(100),
                           pix_x=x * u.m, pix_y=y * u.m,
                           pix_area=x * u.m**2,
                           pix_type='rectangular',
+                          sampling_rate=u.Quantity(1, u.GHz),
                           pix_rotation="10d",
                           cam_rotation="12d")
 
@@ -23,6 +26,7 @@ def test_construct():
 
 
 def test_known_camera_names():
+    """ Check that we can get a list of known camera names """
     cams = CameraGeometry.get_known_camera_names()
     assert len(cams) > 4
     assert 'FlashCam' in cams
@@ -34,16 +38,20 @@ def test_known_camera_names():
 
 
 def test_make_rectangular_camera_geometry():
+    """ Check that we can construct a dummy camera with square geometry """
     geom = CameraGeometry.make_rectangular()
     assert geom.pix_x.shape == geom.pix_y.shape
 
 
-def test_load_hess_camera():
+def test_load_lst_camera():
+    """ test that a specific camera has the expected attributes """
     geom = CameraGeometry.from_name("LSTCam")
     assert len(geom.pix_x) == 1855
+    assert geom.pix_type == "hexagonal"
 
 
 def test_position_to_pix_index():
+    """ test that we can lookup a pixel from a coordinate"""
     geom = CameraGeometry.from_name("LSTCam")
     x, y = 0.80 * u.m, 0.79 * u.m,
     pix_id = geom.position_to_pix_index(x, y)
@@ -51,6 +59,7 @@ def test_position_to_pix_index():
 
 
 def test_find_neighbor_pixels():
+    """ test basic neighbor functionality """
     n_pixels = 5
     x, y = u.Quantity(np.meshgrid(
         np.linspace(-5, 5, n_pixels),
@@ -64,6 +73,7 @@ def test_find_neighbor_pixels():
         pix_x=x.ravel(),
         pix_y=y.ravel(),
         pix_type='rectangular',
+        sampling_rate=u.Quantity(1, u.GHz),
     )
 
     neigh = geom.neighbors
@@ -110,6 +120,7 @@ def test_calc_pixel_neighbors_square():
         pix_x=u.Quantity(x.ravel(), u.cm),
         pix_y=u.Quantity(y.ravel(), u.cm),
         pix_area=u.Quantity(np.ones(400), u.cm**2),
+        sampling_rate=u.Quantity(1, u.GHz),
     )
 
     assert set(cam.neighbors[0]) == {1, 20}
@@ -117,6 +128,10 @@ def test_calc_pixel_neighbors_square():
 
 
 def test_calc_pixel_neighbors_square_diagonal():
+    """
+    check that neighbors for square-pixel cameras are what we expect,
+    namely that the diagonals are included if requested.
+    """
     x, y = np.meshgrid(np.arange(20), np.arange(20))
 
     cam = CameraGeometry(
@@ -126,6 +141,7 @@ def test_calc_pixel_neighbors_square_diagonal():
         pix_x=u.Quantity(x.ravel(), u.cm),
         pix_y=u.Quantity(y.ravel(), u.cm),
         pix_area=u.Quantity(np.ones(400), u.cm**2),
+        sampling_rate=u.Quantity(1, u.GHz),
     )
 
     cam._neighbors = cam.calc_pixel_neighbors(diagonal=True)
@@ -133,6 +149,7 @@ def test_calc_pixel_neighbors_square_diagonal():
 
 
 def test_to_and_from_table():
+    """ Check converting to and from an astropy Table """
     geom = CameraGeometry.from_name("LSTCam")
     tab = geom.to_table()
     geom2 = geom.from_table(tab)
@@ -142,10 +159,11 @@ def test_to_and_from_table():
     assert (geom.pix_y == geom2.pix_y).all()
     assert (geom.pix_area == geom2.pix_area).all()
     assert geom.pix_type == geom2.pix_type
-
+    assert geom.sampling_rate == geom2.sampling_rate
+    
 
 def test_write_read(tmpdir):
-
+    """ Check that serialization to disk doesn't lose info """
     filename = str(tmpdir.join('testcamera.fits.gz'))
 
     geom = CameraGeometry.from_name("LSTCam")
@@ -157,9 +175,14 @@ def test_write_read(tmpdir):
     assert (geom.pix_y == geom2.pix_y).all()
     assert (geom.pix_area == geom2.pix_area).all()
     assert geom.pix_type == geom2.pix_type
+    assert geom.sampling_rate == geom2.sampling_rate
 
 
 def test_precal_neighbors():
+    """
+    test that pre-calculated neighbor lists don't get
+    overwritten by automatic ones
+    """
     geom = CameraGeometry(cam_id="TestCam",
                           pix_id=np.arange(3),
                           pix_x=np.arange(3) * u.deg,
@@ -169,6 +192,7 @@ def test_precal_neighbors():
                               [1, ], [0, 2], [1, ]
                           ],
                           pix_type='rectangular',
+                          sampling_rate=u.Quantity(1, u.GHz),
                           pix_rotation="0deg",
                           cam_rotation="0deg")
 
@@ -181,6 +205,7 @@ def test_precal_neighbors():
 
 
 def test_slicing():
+    """ Check that we can slice a camera into a smaller one """
     geom = CameraGeometry.from_name("NectarCam")
     sliced1 = geom[100:200]
 
@@ -197,6 +222,7 @@ def test_slicing():
 
 @pytest.mark.parametrize("cam_id", cam_ids)
 def test_slicing_rotation(cam_id):
+    """ Check that we can rotate and slice """
     cam = CameraGeometry.from_name(cam_id)
     cam.rotate('25d')
 
@@ -206,6 +232,7 @@ def test_slicing_rotation(cam_id):
 
 
 def test_rectangle_patch_neighbors():
+    """" test that a simple rectangular camera has the expected neighbors """
     pix_x = np.array([
         -1.1, 0.1, 0.9,
         -1, 0, 1,
@@ -223,6 +250,7 @@ def test_rectangle_patch_neighbors():
         pix_y=pix_y,
         pix_area=None,
         pix_type='rectangular',
+        sampling_rate=u.Quantity(1, u.GHz),
     )
 
     assert np.all(cam.neighbor_matrix.T == cam.neighbor_matrix)
@@ -231,6 +259,7 @@ def test_rectangle_patch_neighbors():
 
 
 def test_border_pixels():
+    """ check we can find border pixels"""
     from ctapipe.instrument.camera import CameraGeometry
 
     cam = CameraGeometry.from_name("LSTCam")
@@ -248,6 +277,7 @@ def test_border_pixels():
 
 
 def test_equals():
+    """ check we can use the == operator """
     cam1 = CameraGeometry.from_name("LSTCam")
     cam2 = CameraGeometry.from_name("LSTCam")
     cam3 = CameraGeometry.from_name("ASTRICam")
@@ -258,8 +288,29 @@ def test_equals():
 
 
 def test_hashing():
+    """" check that hashes are correctly computed """
     cam1 = CameraGeometry.from_name("LSTCam")
     cam2 = CameraGeometry.from_name("LSTCam")
     cam3 = CameraGeometry.from_name("ASTRICam")
 
     assert len(set([cam1, cam2, cam3])) == 2
+
+
+@pytest.mark.parametrize("camera_name", CameraGeometry.get_known_camera_names())
+def test_camera_from_name(camera_name):
+    """ check we can construct all cameras from name"""
+    camera = CameraGeometry.from_name(camera_name)
+    assert str(camera) == camera_name
+
+
+@pytest.mark.parametrize("camera_name", CameraGeometry.get_known_camera_names())
+def test_camera_coordinate_transform(camera_name):
+    '''test conversion of the coordinates stored in a camera frame'''
+    from ctapipe.coordinates import EngineeringCameraFrame
+
+    geom = CameraGeometry.from_name(camera_name)
+    trans_geom = geom.transform_to(EngineeringCameraFrame())
+
+    unit = geom.pix_x.unit
+    assert np.allclose(geom.pix_x.to_value(unit), -trans_geom.pix_y.to_value(unit))
+    assert np.allclose(geom.pix_y.to_value(unit), -trans_geom.pix_x.to_value(unit))
